@@ -1,0 +1,128 @@
+[build-system]
+# Specifies that setuptools is needed to build the project
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# Core project metadata
+name = "kaleidoscope-ai" # The name used for installation
+version = "0.1.0"       # Initial version
+description = "Kaleidoscope AI - Software Ingestion, Analysis, and Mimicry System with Quantum-Inspired Elements"
+readme = "README.md"    # Assumes you have a README.md file
+requires-python = ">=3.10" # Based on the Python version in the Dockerfile
+license = { text = "LICENSE file not provided" } # Placeholder - Add license info if available
+
+# Replace with actual author details
+authors = [
+  { name = "Your Name / Original Author", email = "your.email@example.com" },
+]
+maintainers = [
+  { name = "Your Name / Original Author", email = "your.email@example.com" },
+]
+
+# More detailed classifiers help categorize the project
+classifiers = [
+    "Development Status :: 3 - Alpha", # Project stage
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: OS Independent",
+    "License :: OSI Approved :: MIT License", # Example: Change if needed
+    "Topic :: Software Development :: Disassemblers",
+    "Topic :: Software Development :: Compilers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: System :: Emulators",
+]
+
+# Keywords for discoverability
+keywords = ["reverse engineering", "decompilation", "binary analysis", "software mimicry", "llm", "ollama", "ghidra", "radare2", "ai", "quantum ai"]
+
+# Tells the build system to read core dependencies from requirements.txt
+dynamic = ["dependencies"]
+
+# Optional: Add URLs for project homepage, repository, etc.
+[project.urls]
+Homepage = "local" # Placeholder
+Repository = "local" # Placeholder
+Documentation = "local" # Placeholder
+
+# Defines command-line entry points
+[project.scripts]
+# Original entry point, likely starts the web UI
+kaleidoscope = "kaleidoscope_web:main"
+# New entry point possibly using the launcher script (assuming launcher.py exists in scripts/ with a main function)
+kaleidoscope-launcher = "scripts.launcher:main"
+
+# Defines graphical user interface entry points
+[project.gui-scripts]
+# Entry point for the Tkinter visualizer (assuming qsin_visualizer.py exists in visualization/ with a main function)
+qsin-viz = "visualization.qsin_visualizer:main"
+
+# Defines optional sets of dependencies
+[project.optional-dependencies]
+# Dependencies for specific visualization backends
+viz = ["plotly>=5.0", "matplotlib>=3.5"]
+viz-plotly = ["plotly>=5.0"] # For plotly_visualizer.py
+viz-tkinter = ["matplotlib>=3.5"] # For qsin-network-visualizer.py (Tkinter usually system-installed)
+
+# Dependencies if using specific LLM backends (if different from core requirements)
+llamacpp = ["llama-cpp-python"] # If using llamacpp_api provider
+
+# Dependencies for all development (testing, linting, formatting)
+dev = ["pytest", "ruff", "black", "isort", "mypy"]
+test = ["pytest"]
+lint = ["ruff", "black", "isort", "mypy"]
+
+
+# --- Tool-specific configurations ---
+
+[tool.setuptools.dynamic]
+# Specifies that the 'dependencies' field in [project] comes from requirements.txt
+dependencies = {file = ["requirements.txt"]} # Assumes requirements.txt lists CORE dependencies
+
+[tool.setuptools.packages.find]
+# Tells setuptools to look for Python packages directly in the project root directory
+where = ["."]
+# Explicitly include directories that contain your Python code
+# Add any other directories containing Python modules if needed
+include = ["core*", "llm*", "utils*", "sandbox*", "analysis*", "reconstruction*",
+           "mimicry*", "interfaces*", "quantum*", "visualization*", "nodes*",
+           "supernode*", "state*", "patterns*", "auth*", "error*", "web*", "licensing*"]
+# Exclude directories that don't contain installable Python code
+exclude = ["_unclassified*", "docs*", "scripts*", "tests*", "data*", ".venv*"]
+
+# **NEW SECTION: Include non-code package data**
+[tool.setuptools.package-data]
+# Include all files within the web/templates and web/static directories
+# This ensures HTML, CSS, JS for the web interface are installed with the package
+web = ["templates/*", "templates/*/*", "static/*", "static/*/*"]
+# Example: If you had default data files in 'core':
+# core = ["default_data/*"]
+
+# --- Placeholder configurations for common development tools ---
+
+[tool.black]
+# Configuration for the Black code formatter
+line-length = 88
+target-version = ['py310']
+
+[tool.isort]
+# Configuration for the isort import sorter
+profile = "black"
+line_length = 88
+
+[tool.ruff]
+# Configuration for the Ruff linter
+line-length = 88
+select = ["E", "W", "F", "I", "C", "B"] # Example rule codes
+ignore = ["E501"] # Example ignore rule (line too long, handled by black)
+target-version = "py310"
+
+[tool.mypy]
+# Configuration for the MyPy static type checker
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+# Add other MyPy settings as needed

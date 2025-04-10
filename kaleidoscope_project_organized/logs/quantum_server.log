@@ -1,0 +1,7 @@
+/home/jg/Music/include/kaleidoscope_project_organized/quantum/quantum_server.py:197: DeprecationWarning: websockets.WebSocketServerProtocol is deprecated
+  connection: Optional[websockets.WebSocketServerProtocol] = None
+/home/jg/Music/include/kaleidoscope_project_organized/quantum/quantum_server.py:255: DeprecationWarning: websockets.WebSocketServerProtocol is deprecated
+  def register_node(self, node_id: str, name: str, connection: websockets.WebSocketServerProtocol) -> QuantumNetworkNode:
+/home/jg/Music/include/kaleidoscope_project_organized/quantum/quantum_server.py:509: DeprecationWarning: websockets.WebSocketServerProtocol is deprecated
+  async def handle_connection(self, websocket: websockets.WebSocketServerProtocol, path: str) -> None:
+Config file config.yaml not found. Using defaults.

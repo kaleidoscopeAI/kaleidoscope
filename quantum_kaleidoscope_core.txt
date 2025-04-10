@@ -1,0 +1,3919 @@
+        # Look for significant imbalances
+        max_type = max(distribution.items(), key=lambda x: x[1])
+        min_type = min(distribution.items(), key=lambda x: x[1])
+        
+        # Check if distribution is skewed
+        if max_type[1] > 0.5:  # One type is more than 50%
+            return {
+                "type": "node_distribution",
+                "distribution": distribution,
+                "observation": f"System is dominated by {max_type[0]} nodes ({max_type[1]*100:.1f}%)",
+                "confidence": 0.8,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        elif max_type[1] / (min_type[1] + 0.001) > 3:  # Ratio of max to min is high
+            return {
+                "type": "node_distribution",
+                "distribution": distribution,
+                "observation": f"Large imbalance between {max_type[0]} nodes ({max_type[1]*100:.1f}%) and {min_type[0]} nodes ({min_type[1]*100:.1f}%)",
+                "confidence": 0.7,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+        # No significant pattern found
+        return None
+        
+    def _analyze_energy_flows(self) -> Optional[Dict[str, Any]]:
+        """Analyze energy flow patterns between nodes"""
+        # Get all nodes and connections
+        nodes = self.node_manager.get_all_nodes()
+        
+        # Skip if less than 5 nodes
+        if len(nodes) < 5:
+            return None
+            
+        # Create node energy map
+        energy_map = {node.id: node.energy for node in nodes}
+        
+        # Calculate energy flow directions
+        flow_directions = {}
+        net_flows = {}
+        
+        for source_id, targets in self.node_manager.connections.items():
+            # Skip if source not in energy map
+            if source_id not in energy_map:
+                continue
+                
+            # Calculate outgoing flow
+            outgoing_flow = 0
+            
+            for target_id, strength in targets.items():
+                # Skip if target not in energy map
+                if target_id not in energy_map:
+                    continue
+                    
+                # Calculate flow based on energy differential and strength
+                energy_diff = energy_map[source_id] - energy_map[target_id]
+                flow = energy_diff * strength * 0.1
+                
+                # Add to outgoing flow
+                outgoing_flow += flow
+                
+                # Record flow direction
+                flow_directions[(source_id, target_id)] = flow
+                
+            # Record net flow for source
+            net_flows[source_id] = net_flows.get(source_id, 0) - outgoing_flow
+            
+        # Check for significant energy sinks or sources
+        if not net_flows:
+            return None
+            
+        # Find nodes with highest and lowest net flow
+        max_flow_node = max(net_flows.items(), key=lambda x: x[1])
+        min_flow_node = min(net_flows.items(), key=lambda x: x[1])
+        
+        # Check if flows are significant
+        if max_flow_node[1] > 5:  # Significant energy source
+            source_node = self.node_manager.get_node(max_flow_node[0])
+            if source_node:
+                return {
+                    "type": "energy_flow",
+                    "observation": f"{source_node.type.name} node {source_node.id[:8]} is a significant energy source (+{max_flow_node[1]:.1f})",
+                    "node_id": source_node.id,
+                    "flow_value": max_flow_node[1],
+                    "confidence": min(0.9, max_flow_node[1] / 10),
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+        elif min_flow_node[1] < -5:  # Significant energy sink
+            sink_node = self.node_manager.get_node(min_flow_node[0])
+            if sink_node:
+                return {
+                    "type": "energy_flow",
+                    "observation": f"{sink_node.type.name} node {sink_node.id[:8]} is a significant energy sink ({min_flow_node[1]:.1f})",
+                    "node_id": sink_node.id,
+                    "flow_value": min_flow_node[1],
+                    "confidence": min(0.9, abs(min_flow_node[1]) / 10),
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                
+        # No significant pattern found
+        return None
+        
+    def _analyze_node_clusters(self) -> List[Dict[str, Any]]:
+        """Analyze clusters of connected nodes"""
+        # Create graph representation
+        G = nx.Graph()
+        
+        # Add all nodes
+        for node in self.node_manager.get_all_nodes():
+            G.add_node(node.id, type=node.type.name, energy=node.energy)
+            
+        # Add all connections (undirected for clustering)
+        for source_id, targets in self.node_manager.connections.items():
+            for target_id, strength in targets.items():
+                G.add_edge(source_id, target_id, weight=strength)
+                
+        # Skip if no edges
+        if len(G.edges) == 0:
+            return []
+            
+        # Detect communities using Louvain method
+        try:
+            import community as community_louvain
+            partition = community_louvain.best_partition(G)
+            
+            # Count nodes in each community
+            community_counts = {}
+            for node_id, community_id in partition.items():
+                community_counts[community_id] = community_counts.get(community_id, 0) + 1
+                
+            # Find significant communities (more than 3 nodes)
+            significant_communities = [c for c, count in community_counts.items() if count >= 3]
+            
+            # Analyze each significant community
+            results = []
+            
+            for community_id in significant_communities:
+                # Get nodes in this community
+                community_nodes = [node_id for node_id, comm_id in partition.items() if comm_id == community_id]
+                
+                # Get node objects
+                nodes = [self.node_manager.get_node(node_id) for node_id in community_nodes]
+                nodes = [node for node in nodes if node]  # Filter out None
+                
+                # Skip if no nodes
+                if not nodes:
+                    continue
+                    
+                # Count node types
+                type_counts = {}
+                for node in nodes:
+                    type_name = node.type.name
+                    type_counts[type_name] = type_counts.get(type_name, 0) + 1
+                    
+                # Determine dominant type if any
+                dominant_type = None
+                for type_name, count in type_counts.items():
+                    if count / len(nodes) > 0.6:  # More than 60% of one type
+                        dominant_type = type_name
+                        break
+                        
+                # Calculate average energy
+                avg_energy = sum(node.energy for node in nodes) / len(nodes)
+                
+                # Generate observation
+                if dominant_type:
+                    observation = f"Cluster of {len(nodes)} nodes, dominated by {dominant_type} nodes ({type_counts[dominant_type]} nodes)"
+                else:
+                    observation = f"Mixed cluster of {len(nodes)} nodes: " + ", ".join(f"{count} {type_name}" for type_name, count in type_counts.items())
+                    
+                # Add energy observation
+                if avg_energy > 80:
+                    observation += f", high average energy ({avg_energy:.1f})"
+                elif avg_energy < 30:
+                    observation += f", low average energy ({avg_energy:.1f})"
+                
+                # Create result
+                result = {
+                    "type": "node_cluster",
+                    "community_id": community_id,
+                    "node_count": len(nodes),
+                    "node_types": type_counts,
+                    "avg_energy": avg_energy,
+                    "observation": observation,
+                    "confidence": min(0.9, len(nodes) / 10),
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                
+                results.append(result)
+                
+            return results
+                
+        except ImportError:
+            # Fallback to connected components if community detection not available
+            connected_components = list(nx.connected_components(G))
+            
+            # Filter to significant components (more than 3 nodes)
+            significant_components = [comp for comp in connected_components if len(comp) >= 3]
+            
+            # Analyze each significant component
+            results = []
+            
+            for i, component in enumerate(significant_components):
+                # Get node objects
+                nodes = [self.node_manager.get_node(node_id) for node_id in component]
+                nodes = [node for node in nodes if node]  # Filter out None
+                
+                # Skip if no nodes
+                if not nodes:
+                    continue
+                    
+                # Count node types
+                type_counts = {}
+                for node in nodes:
+                    type_name = node.type.name
+                    type_counts[type_name] = type_counts.get(type_name, 0) + 1
+                    
+                # Calculate average energy
+                avg_energy = sum(node.energy for node in nodes) / len(nodes)
+                
+                # Generate observation
+                observation = f"Connected group of {len(nodes)} nodes: " + ", ".join(f"{count} {type_name}" for type_name, count in type_counts.items())
+                
+                # Add energy observation
+                if avg_energy > 80:
+                    observation += f", high average energy ({avg_energy:.1f})"
+                elif avg_energy < 30:
+                    observation += f", low average energy ({avg_energy:.1f})"
+                
+                # Create result
+                result = {
+                    "type": "connected_component",
+                    "component_id": i,
+                    "node_count": len(nodes),
+                    "node_types": type_counts,
+                    "avg_energy": avg_energy,
+                    "observation": observation,
+                    "confidence": min(0.9, len(nodes) / 10),
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                
+                results.append(result)
+                
+            return results
+
+# =====================================================================
+# Task Scheduler - Manages and executes system tasks
+# =====================================================================
+
+class OptimizedTaskScheduler:
+    """Manages and executes system tasks with priority and resource awareness"""
+    
+    def __init__(self, max_workers: int = 4):
+        """Initialize task scheduler"""
+        self.max_workers = max_workers
+        self.tasks = {}  # Dict of task_id -> task dict
+        self.pending_tasks = queue.PriorityQueue()  # Priority queue of (priority, task_id)
+        self.running_tasks = {}  # Dict of task_id -> future
+        self.executor = ThreadPoolExecutor(max_workers=max_workers)
+        self.continue_running = True
+        
+        # Start scheduler thread
+        self.scheduler_thread = threading.Thread(target=self._scheduler_loop)
+        self.scheduler_thread.daemon = True
+        self.scheduler_thread.start()
+        
+        # Load tasks from database
+        self._load_tasks_from_db()
+        
+    def _load_tasks_from_db(self):
+        """Load tasks from database"""
+        try:
+            with db_manager as session:
+                # Query pending tasks
+                pending_tasks = session.query(TaskModel).filter(
+                    TaskModel.status == TaskStatus.PENDING.name
+                ).all()
+                
+                # Add to tasks dict and queue
+                for task_model in pending_tasks:
+                    task = {
+                        "id": task_model.id,
+                        "type": task_model.type,
+                        "status": TaskStatus[task_model.status],
+                        "priority": task_model.priority,
+                        "created_at": task_model.created_at,
+                        "parameters": task_model.parameters
+                    }
+                    
+                    self.tasks[task["id"]] = task
+                    self.pending_tasks.put((task_model.priority * -1, task["id"]))  # Negative for highest-first
+                    
+                # Query running tasks (should be none, but just in case)
+                running_tasks = session.query(TaskModel).filter(
+                    TaskModel.status == TaskStatus.RUNNING.name
+                ).all()
+                
+                # Reset to pending
+                for task_model in running_tasks:
+                    task_model.status = TaskStatus.PENDING.name
+                    
+                    task = {
+                        "id": task_model.id,
+                        "type": task_model.type,
+                        "status": TaskStatus.PENDING,
+                        "priority": task_model.priority,
+                        "created_at": task_model.created_at,
+                        "parameters": task_model.parameters
+                    }
+                    
+                    self.tasks[task["id"]] = task
+                    self.pending_tasks.put((task_model.priority * -1, task["id"]))
+        except Exception as e:
+            logger.error(f"Failed to load tasks from database: {str(e)}")
+            
+    def _scheduler_loop(self):
+        """Main scheduler loop - processes pending tasks"""
+        while self.continue_running:
+            try:
+                # Check if we can start more tasks
+                if len(self.running_tasks) < self.max_workers:
+                    # Try to get a task
+                    try:
+                        _, task_id = self.pending_tasks.get(timeout=1)
+                        
+                        # Get task
+                        task = self.tasks.get(task_id)
+                        
+                        # Skip if task not found or not pending
+                        if not task or task["status"] != TaskStatus.PENDING:
+                            continue
+                            
+                        # Start task
+                        self._start_task(task)
+                        
+                    except queue.Empty:
+                        # No pending tasks
+                        pass
+                        
+                # Check completed tasks
+                self._check_completed_tasks()
+                
+                # Sleep briefly
+                time.sleep(0.1)
+                
+            except Exception as e:
+                logger.error(f"Error in scheduler loop: {str(e)}")
+                time.sleep(1)  # Sleep longer on error
+                
+    def _start_task(self, task: Dict[str, Any]):
+        """Start a task"""
+        # Update task status
+        task["status"] = TaskStatus.RUNNING
+        task["started_at"] = datetime.utcnow()
+        
+        # Update in database
+        try:
+            with db_manager as session:
+                task_model = session.query(TaskModel).filter(TaskModel.id == task["id"]).first()
+                
+                if task_model:
+                    task_model.status = TaskStatus.RUNNING.name
+                    task_model.started_at = task["started_at"]
+        except Exception as e:
+            logger.error(f"Failed to update task status: {str(e)}")
+            
+        # Submit task to executor
+        future = self.executor.submit(self._run_task, task)
+        
+        # Store future
+        self.running_tasks[task["id"]] = future
+        
+    def _check_completed_tasks(self):
+        """Check for completed tasks"""
+        # Get completed tasks
+        completed = []
+        
+        for task_id, future in list(self.running_tasks.items()):
+            if future.done():
+                completed.append(task_id)
+                
+        # Process completed tasks
+        for task_id in completed:
+            future = self.running_tasks.pop(task_id)
+            
+            try:
+                # Get result
+                result = future.result()
+                
+                # Update task
+                task = self.tasks.get(task_id)
+                
+                if task:
+                    task["status"] = TaskStatus.COMPLETED
+                    task["completed_at"] = datetime.utcnow()
+                    task["result"] = result
+                    
+                    # Update in database
+                    with db_manager as session:
+                        task_model = session.query(TaskModel).filter(TaskModel.id == task_id).first()
+                        
+                        if task_model:
+                            task_model.status = TaskStatus.COMPLETED.name
+                            task_model.completed_at = task["completed_at"]
+                            task_model.result = result
+                            
+                    logger.info(f"Task {task_id} completed successfully")
+                    
+            except Exception as e:
+                # Task failed
+                error_str = str(e)
+                logger.error(f"Task {task_id} failed: {error_str}")
+                
+                # Update task
+                task = self.tasks.get(task_id)
+                
+                if task:
+                    task["status"] = TaskStatus.FAILED
+                    task["completed_at"] = datetime.utcnow()
+                    task["error"] = error_str
+                    
+                    # Update in database
+                    try:
+                        with db_manager as session:
+                            task_model = session.query(TaskModel).filter(TaskModel.id == task_id).first()
+                            
+                            if task_model:
+                                task_model.status = TaskStatus.FAILED.name
+                                task_model.completed_at = task["completed_at"]
+                                task_model.error = error_str
+                    except Exception as db_error:
+                        logger.error(f"Failed to update failed task in database: {str(db_error)}")
+                
+    def _run_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        """Run a task - override in subclasses"""
+        # Base implementation just returns success
+        return {
+            "success": True,
+            "message": f"Task {task['type']} executed (base implementation)"
+        }
+        
+    def add_task(self, task_type: str, parameters: Dict[str, Any] = None, 
+                priority: int = TaskPriority.NORMAL.value) -> str:
+        """Add a task to the scheduler"""
+        # Generate task ID
+        task_id = str(uuid.uuid4())
+        
+        # Create task
+        task = {
+            "id": task_id,
+            "type": task_type,
+            "status": TaskStatus.PENDING,
+            "priority": priority,
+            "created_at": datetime.utcnow(),
+            "parameters": parameters or {}
+        }
+        
+        # Add to tasks dict
+        self.tasks[task_id] = task
+        
+        # Add to priority queue
+        self.pending_tasks.put((priority * -1, task_id))  # Negative for highest-first
+        
+        # Save to database
+        try:
+            with db_manager as session:
+                task_model = TaskModel(
+                    id=task_id,
+                    type=task_type,
+                    status=TaskStatus.PENDING.name,
+                    priority=priority,
+                    created_at=task["created_at"],
+                    parameters=task["parameters"]
+                )
+                session.add(task_model)
+        except Exception as e:
+            logger.error(f"Failed to save task to database: {str(e)}")
+            
+        return task_id
+        
+    def cancel_task(self, task_id: str) -> bool:
+        """Cancel a task"""
+        # Check if task exists
+        if task_id not in self.tasks:
+            return False
+            
+        task = self.tasks[task_id]
+        
+        # Check if task is already completed or failed
+        if task["status"] in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELED]:
+            return False
+            
+        # If task is running, cancel it
+        if task["status"] == TaskStatus.RUNNING and task_id in self.running_tasks:
+            future = self.running_tasks[task_id]
+            future.cancel()
+            del self.running_tasks[task_id]
+            
+        # Update task status
+        task["status"] = TaskStatus.CANCELED
+        
+        # Update in database
+        try:
+            with db_manager as session:
+                task_model = session.query(TaskModel).filter(TaskModel.id == task_id).first()
+                
+                if task_model:
+                    task_model.status = TaskStatus.CANCELED.name
+        except Exception as e:
+            logger.error(f"Failed to update canceled task in database: {str(e)}")
+            
+        return True
+        
+    def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Get task by ID"""
+        return self.tasks.get(task_id)
+        
+    def get_pending_tasks(self) -> List[Dict[str, Any]]:
+        """Get all pending tasks"""
+        return [task for task in self.tasks.values() if task["status"] == TaskStatus.PENDING]
+        
+    def get_running_tasks(self) -> List[Dict[str, Any]]:
+        """Get all running tasks"""
+        return [task for task in self.tasks.values() if task["status"] == TaskStatus.RUNNING]
+        
+    def shutdown(self):
+        """Shutdown the scheduler"""
+        self.continue_running = False
+        self.executor.shutdown(wait=False)
+
+# =====================================================================
+# AI Core - Main system orchestrator
+# =====================================================================
+
+class AI_Core:
+    """Main system orchestrator"""
+    
+    def __init__(self):
+        """Initialize AI Core"""
+        # Create core components
+        self.node_manager = NodeManager()
+        self.memory_graph = MemoryGraph()
+        self.quantum_engine = QuantumEngine()
+        self.pattern_recognition = PatternRecognition(self.node_manager, self.memory_graph)
+        self.task_scheduler = OptimizedTaskScheduler(
+            max_workers=config_manager.get('system.max_workers', 4)
+        )
+        
+        # Initialize system state
+        self.running = False
+        self.cycle_count = 0
+        self.last_cycle_time = datetime.utcnow()
+        self.cycle_duration = 1.0  # seconds
+        
+        # Create/ensure essential node types if needed
+        self._ensure_essential_nodes()
+        
+    def _ensure_essential_nodes(self):
+        """Ensure essential node types exist"""
+        # Check for at least one text node
+        if self.node_manager.get_node_count_by_type(NodeType.TEXT) == 0:
+            text_node_id = self.node_manager.create_node(NodeType.TEXT, "PrimaryTextNode")
+            text_node = self.node_manager.get_node(text_node_id)
+            if text_node:
+                # Initialize with basic capabilities info
+                text_node.set_text("Quantum Kaleidoscope System - Primary Text Processing Node")
+                
+        # Check for at least one visual node
+        if self.node_manager.get_node_count_by_type(NodeType.VISUAL) == 0:
+            visual_node_id = self.node_manager.create_node(NodeType.VISUAL, "PrimaryVisualNode")
+            
+        # Check for at least one capability node
+        if self.node_manager.get_node_count_by_type(NodeType.CAPABILITY) == 0:
+            capability_node_id = self.node_manager.create_node(
+                NodeType.CAPABILITY, "CoreCapabilityNode")
+            
+    def start(self):
+        """Start the AI Core"""
+        if self.running:
+            logger.warning("AI Core already running")
+            return
+            
+        logger.info("Starting AI Core")
+        self.running = True
+        
+        # Start main loop in a separate thread
+        self.main_thread = threading.Thread(target=self._main_loop)
+        self.main_thread.daemon = True
+        self.main_thread.start()
+        
+    def stop(self):
+        """Stop the AI Core"""
+        if not self.running:
+            logger.warning("AI Core not running")
+            return
+            
+        logger.info("Stopping AI Core")
+        self.running = False
+        
+        # Wait for main thread to end
+        if hasattr(self, 'main_thread') and self.main_thread.is_alive():
+            self.main_thread.join(timeout=5)
+            
+        # Shutdown task scheduler
+        self.task_scheduler.shutdown()
+        
+    def _main_loop(self):
+        """Main processing loop"""
+        while self.running:
+            try:
+                # Calculate time since last cycle
+                now = datetime.utcnow()
+                elapsed = (now - self.last_cycle_time).total_seconds()
+                
+                # Run cycle if enough time has passed
+                if elapsed >= self.cycle_duration:
+                    self._run_cycle(elapsed)
+                    self.last_cycle_time = now
+                    self.cycle_count += 1
+                    
+                    # Log every 10 cycles
+                    if self.cycle_count % 10 == 0:
+                        logger.info(f"Completed cycle {self.cycle_count}")
+                    
+                # Sleep briefly
+                time.sleep(0.1)
+                
+            except Exception as e:
+                logger.error(f"Error in main loop: {str(e)}")
+                traceback.print_exc()
+                time.sleep(1)  # Sleep longer on error
+                
+    def _run_cycle(self, elapsed_time: float):
+        """Run a single processing cycle"""
+        # 1. Process energy transfers between nodes
+        self.node_manager.process_energy_transfers()
+        
+        # 2. Process energy decay
+        self.node_manager.process_energy_decay(elapsed_time)
+        
+        # 3. Process stability changes
+        self.node_manager.process_stability_changes()
+        
+        # 4. Update node states
+        self.node_manager.update_node_states()
+        
+        # 5. Process quantum effects (every 3 cycles)
+        if self.cycle_count % 3 == 0:
+            self.quantum_engine.process_quantum_effects(self.node_manager)
+            
+        # 6. Process growth (every 5 cycles)
+        if self.cycle_count % 5 == 0:
+            self.node_manager.process_growth()
+            
+        # 7. Process mutations (every 7 cycles)
+        if self.cycle_count % 7 == 0:
+            self.node_manager.process_mutations()
+            
+        # 8. Recognize patterns (every 10 cycles)
+        if self.cycle_count % 10 == 0:
+            patterns = self.pattern_recognition.recognize_patterns()
+            
+            # Log patterns
+            if patterns:
+                logger.info(f"Recognized {len(patterns)} patterns")
+                
+        # 9. Process memory decay (every 30 cycles)
+        if self.cycle_count % 30 == 0:
+            self.memory_graph.process_decay()
+            
+    def process_text(self, text: str) -> Dict[str, Any]:
+        """Process text input"""
+        # Find or create text node
+        text_nodes = [node for node in self.node_manager.get_all_nodes() 
+                    if node.type == NodeType.TEXT]
+        
+        if text_nodes:
+            # Use first available text node
+            text_node = text_nodes[0]
+        else:
+            # Create new text node
+            node_id = self.node_manager.create_node(NodeType.TEXT)
+            text_node = self.node_manager.get_node(node_id)
+            
+        # Process text
+        if isinstance(text_node, TextNode):
+            # Set text
+            text_node.set_text(text)
+            
+            # Process node
+            results = text_node.process()
+            
+            # Store in memory
+            self.memory_graph.add_memory(
+                key=f"text:{uuid.uuid4()}",
+                value={"text": text, "analysis": results},
+                source_node_id=text_node.id,
+                importance=0.7
+            )
+            
+            return results
+        else:
+            logger.error("Invalid text node type")
+            return {"error": "Invalid text node type"}
+            
+    def process_image(self, image_path: str) -> Dict[str, Any]:
+        """Process image input"""
+        # Find or create visual node
+        visual_nodes = [node for node in self.node_manager.get_all_nodes() 
+                      if node.type == NodeType.VISUAL]
+        
+        if visual_nodes:
+            # Use first available visual node
+            visual_node = visual_nodes[0]
+        else:
+            # Create new visual node
+            node_id = self.node_manager.create_node(NodeType.VISUAL)
+            visual_node = self.node_manager.get_node(node_id)
+            
+        # Process image
+        if isinstance(visual_node, VisualNode):
+            # Load image
+            success = visual_node.load_image(image_path)
+            
+            if not success:
+                return {"error": "Failed to load image"}
+                
+            # Process node
+            results = visual_node.process()
+            
+            # Store in memory
+            self.memory_graph.add_memory(
+                key=f"image:{uuid.uuid4()}",
+                value={"image_path": image_path, "analysis": results},
+                source_node_id=visual_node.id,
+                importance=0.7
+            )
+            
+            return results
+        else:
+            logger.error("Invalid visual node type")
+            return {"error": "Invalid visual node type"}
+            
+    def search_memory(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Search system memory"""
+        return self.memory_graph.search_memories(query, limit)
+        
+    def add_task(self, task_type: str, parameters: Dict[str, Any] = None, 
+                priority: int = TaskPriority.NORMAL.value) -> str:
+        """Add a task to the scheduler"""
+        return self.task_scheduler.add_task(task_type, parameters, priority)
+        
+    def get_task_status(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Get task status"""
+        return self.task_scheduler.get_task(task_id)
+        
+    def get_system_status(self) -> Dict[str, Any]:
+        """Get overall system status"""
+        return {
+            "running": self.running,
+            "cycle_count": self.cycle_count,
+            "node_count": self.node_manager.node_count,
+            "node_types": {
+                t.name: self.node_manager.get_node_count_by_type(t)
+                for t in NodeType
+            },
+            "average_energy": self.node_manager.get_average_energy(),
+            "pending_tasks": len(self.task_scheduler.get_pending_tasks()),
+            "running_tasks": len(self.task_scheduler.get_running_tasks()),
+            "memory_count": len(self.memory_graph.get_all_memories()),
+            "system_coherence": self.quantum_engine.system_tensor.coherence,
+            "entropy_level": self.quantum_engine.entropy_pool.entropy,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
+# =====================================================================
+# Main entry point
+# =====================================================================
+
+def main():
+    """Main entry point"""
+    # Set up environment
+    setup_virtual_environment()
+    
+    # Create AI Core
+    core = AI_Core()
+    
+    # Start core
+    core.start()
+    
+    # Basic system info
+    logger.info(f"Quantum Kaleidoscope System running")
+    logger.info(f"Node count: {core.node_manager.node_count}")
+    
+    try:
+        # Keep running until interrupted
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logger.info("Shutting down Quantum Kaleidoscope System")
+        core.stop()
+
+if __name__ == "__main__":
+    main()
+        data.update({
+            "image_path": self.image_path,
+            "image_size": self.image.size if self.image else None,
+            "analysis_results": self.analysis_results
+        })
+        return data
+        
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'VisualNode':
+        """Create VisualNode from dictionary"""
+        node = super(VisualNode, cls).from_dict(data)
+        
+        # Set visual-specific fields
+        if "image_path" in data and data["image_path"]:
+            node.image_path = data["image_path"]
+            try:
+                node.load_image(data["image_path"])
+            except:
+                pass
+                
+        if "analysis_results" in data:
+            node.analysis_results = data["analysis_results"]
+            
+        return node
+
+# =====================================================================
+# Node Manager - Manages all nodes and their connections
+# =====================================================================
+
+class NodeManager:
+    """Manages all nodes and their connections in the system"""
+    
+    def __init__(self):
+        """Initialize NodeManager"""
+        self.nodes = {}  # Dict of node_id -> node
+        self.connections = {}  # Dict of source_id -> dict of target_id -> strength
+        self.node_count = 0
+        self.growth_laws = GrowthLaws()
+        self.core_laws = CoreLaws()
+        
+        # Load nodes from database if any
+        self._load_nodes_from_db()
+        
+    def _load_nodes_from_db(self):
+        """Load existing nodes from database"""
+        try:
+            with db_manager as session:
+                # Query all nodes
+                nodes = session.query(NodeModel).all()
+                
+                # Create node instances for each
+                for node_model in nodes:
+                    # Determine node type and create appropriate instance
+                    node_type = NodeType[node_model.type]
+                    
+                    if node_type == NodeType.TEXT:
+                        node = TextNode(node_model.id, node_model.name)
+                    elif node_type == NodeType.VISUAL:
+                        node = VisualNode(node_model.id, node_model.name)
+                    else:
+                        node = BaseNode(node_model.id, node_model.name, node_type)
+                        
+                    # Set properties
+                    node.energy = node_model.energy
+                    node.stability = node_model.stability
+                    node.state = NodeState[node_model.state]
+                    node.features = node_model.features
+                    
+                    # Add to nodes dict
+                    self.nodes[node.id] = node
+                    
+                # Count nodes
+                self.node_count = len(self.nodes)
+                
+                # Load connections
+                connections = session.query(NodeConnectionModel).all()
+                
+                for conn in connections:
+                    source_id = conn.source_id
+                    target_id = conn.target_id
+                    strength = conn.strength
+                    
+                    # Initialize connection dict if needed
+                    if source_id not in self.connections:
+                        self.connections[source_id] = {}
+                        
+                    # Add connection
+                    self.connections[source_id][target_id] = strength
+                    
+        except Exception as e:
+            logger.error(f"Failed to load nodes from database: {str(e)}")
+            # Continue with empty node manager
+            
+    def create_node(self, node_type: NodeType = NodeType.BASE, name: str = None) -> str:
+        """Create a new node of specified type"""
+        # Check if we're below max nodes
+        if self.node_count >= self.growth_laws.config['max_nodes']:
+            logger.warning(f"Maximum node count ({self.growth_laws.config['max_nodes']}) reached, cannot create new node")
+            return None
+            
+        # Create appropriate node type
+        if node_type == NodeType.TEXT:
+            node = TextNode(name=name)
+        elif node_type == NodeType.VISUAL:
+            node = VisualNode(name=name)
+        else:
+            node = BaseNode(name=name, node_type=node_type)
+            
+        # Add to manager
+        self.nodes[node.id] = node
+        self.node_count += 1
+        
+        # Save to database
+        node.save_to_db()
+        
+        # Initialize connections dict
+        self.connections[node.id] = {}
+        
+        logger.info(f"Created new node of type {node_type.name} with ID {node.id}")
+        
+        return node.id
+        
+    def get_node(self, node_id: str) -> Optional[BaseNode]:
+        """Get a node by ID"""
+        return self.nodes.get(node_id)
+        
+    def delete_node(self, node_id: str) -> bool:
+        """Delete a node and all its connections"""
+        # Check if node exists
+        if node_id not in self.nodes:
+            return False
+            
+        # Delete node from dictionary
+        del self.nodes[node_id]
+        self.node_count -= 1
+        
+        # Delete all connections to/from this node
+        if node_id in self.connections:
+            del self.connections[node_id]
+            
+        # Delete connections from other nodes to this node
+        for source_id in self.connections:
+            if node_id in self.connections[source_id]:
+                del self.connections[source_id][node_id]
+                
+        # Delete from database
+        try:
+            with db_manager as session:
+                # Delete connections
+                session.query(NodeConnectionModel).filter(
+                    (NodeConnectionModel.source_id == node_id) | 
+                    (NodeConnectionModel.target_id == node_id)
+                ).delete()
+                
+                # Delete node
+                session.query(NodeModel).filter(NodeModel.id == node_id).delete()
+        except Exception as e:
+            logger.error(f"Failed to delete node {node_id} from database: {str(e)}")
+            return False
+            
+        logger.info(f"Deleted node {node_id}")
+        return True
+        
+    def create_connection(self, source_id: str, target_id: str, strength: float = 0.5) -> bool:
+        """Create connection between two nodes"""
+        # Check if nodes exist
+        if source_id not in self.nodes or target_id not in self.nodes:
+            return False
+            
+        # Initialize connection dict if needed
+        if source_id not in self.connections:
+            self.connections[source_id] = {}
+            
+        # Add connection
+        self.connections[source_id][target_id] = strength
+        
+        # Save to database
+        try:
+            with db_manager as session:
+                # Check if connection exists
+                conn = session.query(NodeConnectionModel).filter(
+                    (NodeConnectionModel.source_id == source_id) & 
+                    (NodeConnectionModel.target_id == target_id)
+                ).first()
+                
+                if conn is None:
+                    # Create new connection
+                    conn = NodeConnectionModel(
+                        source_id=source_id,
+                        target_id=target_id,
+                        strength=strength
+                    )
+                    session.add(conn)
+                else:
+                    # Update existing connection
+                    conn.strength = strength
+        except Exception as e:
+            logger.error(f"Failed to save connection from {source_id} to {target_id}: {str(e)}")
+            return False
+            
+        logger.info(f"Created connection from {source_id} to {target_id} with strength {strength}")
+        return True
+        
+    def delete_connection(self, source_id: str, target_id: str) -> bool:
+        """Delete connection between two nodes"""
+        # Check if connection exists
+        if source_id not in self.connections or target_id not in self.connections[source_id]:
+            return False
+            
+        # Delete connection
+        del self.connections[source_id][target_id]
+        
+        # Delete from database
+        try:
+            with db_manager as session:
+                session.query(NodeConnectionModel).filter(
+                    (NodeConnectionModel.source_id == source_id) & 
+                    (NodeConnectionModel.target_id == target_id)
+                ).delete()
+        except Exception as e:
+            logger.error(f"Failed to delete connection from {source_id} to {target_id}: {str(e)}")
+            return False
+            
+        logger.info(f"Deleted connection from {source_id} to {target_id}")
+        return True
+        
+    def get_connection_strength(self, source_id: str, target_id: str) -> float:
+        """Get strength of connection between two nodes"""
+        if source_id not in self.connections or target_id not in self.connections[source_id]:
+            return 0.0
+            
+        return self.connections[source_id][target_id]
+        
+    def connection_exists(self, source_id: str, target_id: str) -> bool:
+        """Check if connection exists between two nodes"""
+        return source_id in self.connections and target_id in self.connections[source_id]
+        
+    def get_all_nodes(self) -> List[BaseNode]:
+        """Get all nodes"""
+        return list(self.nodes.values())
+        
+    def get_node_count_by_type(self, node_type: NodeType) -> int:
+        """Get count of nodes of a specific type"""
+        return sum(1 for node in self.nodes.values() if node.type == node_type)
+        
+    def get_average_energy(self) -> float:
+        """Get average energy of all nodes"""
+        if not self.nodes:
+            return 0.0
+            
+        total_energy = sum(node.energy for node in self.nodes.values())
+        return total_energy / len(self.nodes)
+        
+    def get_connections_for_node(self, node_id: str) -> Dict[str, float]:
+        """Get all connections from a node"""
+        if node_id not in self.connections:
+            return {}
+            
+        return self.connections[node_id]
+        
+    def get_incoming_connections(self, node_id: str) -> Dict[str, float]:
+        """Get all connections to a node"""
+        incoming = {}
+        
+        for source_id, targets in self.connections.items():
+            if node_id in targets:
+                incoming[source_id] = targets[node_id]
+                
+        return incoming
+        
+    def process_energy_transfers(self):
+        """Process energy transfers between connected nodes"""
+        # Skip if no nodes
+        if not self.nodes:
+            return
+            
+        # Calculate energy transfers for all connections
+        transfers = []
+        
+        for source_id, targets in self.connections.items():
+            # Skip if source node doesn't exist
+            if source_id not in self.nodes:
+                continue
+                
+            source_node = self.nodes[source_id]
+            
+            for target_id, strength in targets.items():
+                # Skip if target node doesn't exist
+                if target_id not in self.nodes:
+                    continue
+                    
+                target_node = self.nodes[target_id]
+                
+                # Calculate energy transfer
+                transfer_amount = self.core_laws.calculate_energy_transfer(
+                    source_node, target_node, strength)
+                
+                # Add to transfers list
+                if transfer_amount > 0:
+                    transfers.append((source_id, target_id, transfer_amount))
+        
+        # Apply all transfers
+        for source_id, target_id, amount in transfers:
+            # Get nodes
+            source_node = self.nodes[source_id]
+            target_node = self.nodes[target_id]
+            
+            # Apply transfer
+            source_node.energy -= amount
+            target_node.energy += amount
+            
+            # Update last_updated timestamp
+            source_node.last_updated = datetime.utcnow()
+            target_node.last_updated = datetime.utcnow()
+            
+        # Save all nodes if any transfers occurred
+        if transfers:
+            with db_manager as session:
+                for node in self.nodes.values():
+                    node.save_to_db(session)
+                    
+    def process_energy_decay(self, time_delta: float = 1.0):
+        """Process natural energy decay for all nodes"""
+        # Skip if no nodes
+        if not self.nodes:
+            return
+            
+        # Process decay for each node
+        for node in self.nodes.values():
+            # Calculate decay amount
+            decay_amount = self.core_laws.calculate_energy_decay(node, time_delta)
+            
+            # Apply decay
+            if decay_amount > 0:
+                node.energy -= decay_amount
+                node.last_updated = datetime.utcnow()
+                
+        # Save all nodes
+        with db_manager as session:
+            for node in self.nodes.values():
+                node.save_to_db(session)
+                
+    def process_stability_changes(self):
+        """Process stability changes for all nodes"""
+        # Skip if no nodes
+        if not self.nodes:
+            return
+            
+        # Process each node
+        for node in self.nodes.values():
+            # Calculate activity level based on energy and connections
+            incoming = self.get_incoming_connections(node.id)
+            outgoing = self.get_connections_for_node(node.id)
+            
+            # Activity is influenced by:
+            # - Higher energy = higher activity
+            # - More connections = higher activity
+            # - Higher connection strengths = higher activity
+            
+            # Normalize energy to 0-1
+            energy_level = min(1.0, node.energy / 100.0)
+            
+            # Connection activity (0-1)
+            total_connections = len(incoming) + len(outgoing)
+            connection_level = min(1.0, total_connections / 10.0)  # Assume 10+ connections is max activity
+            
+            # Connection strength activity (0-1)
+            avg_strength = 0.0
+            if total_connections > 0:
+                total_strength = sum(incoming.values()) + sum(outgoing.values())
+                avg_strength = total_strength / total_connections
+                
+            # Calculate overall activity level (0-1)
+            activity_level = (energy_level * 0.4) + (connection_level * 0.3) + (avg_strength * 0.3)
+            
+            # Calculate stability change
+            stability_change = self.core_laws.calculate_stability_change(node, activity_level)
+            
+            # Apply change
+            if stability_change != 0:
+                node.stability += stability_change
+                node.last_updated = datetime.utcnow()
+                
+                # Ensure stability is within 0-1 range
+                node.stability = max(0.0, min(1.0, node.stability))
+                
+        # Save all nodes
+        with db_manager as session:
+            for node in self.nodes.values():
+                node.save_to_db(session)
+                
+    def update_node_states(self):
+        """Update states for all nodes"""
+        # Skip if no nodes
+        if not self.nodes:
+            return
+            
+        # Update each node's state
+        for node in self.nodes.values():
+            node.update_state(self.core_laws)
+            
+        # Save all nodes
+        with db_manager as session:
+            for node in self.nodes.values():
+                node.save_to_db(session)
+                
+    def process_growth(self):
+        """Process system growth (new nodes and connections)"""
+        # Check if we should create new nodes
+        for node_type in NodeType:
+            if self.growth_laws.should_create_node(self, node_type):
+                self.create_node(node_type)
+                
+        # Process potential new connections
+        self._process_new_connections()
+                
+    def _process_new_connections(self):
+        """Process potential new connections between nodes"""
+        # Skip if less than 2 nodes
+        if self.node_count < 2:
+            return
+            
+        # Get all nodes
+        nodes = list(self.nodes.values())
+        
+        # Check potential connections between nodes
+        # Limit to a random subset for performance with large node counts
+        max_checks = min(100, len(nodes) * 10)
+        checks_count = 0
+        
+        # Shuffle nodes for random sampling
+        np.random.shuffle(nodes)
+        
+        for i, source_node in enumerate(nodes):
+            if checks_count >= max_checks:
+                break
+                
+            # Get potential targets
+            for target_node in nodes[i+1:]:
+                if checks_count >= max_checks:
+                    break
+                    
+                # Skip if connection already exists
+                if self.connection_exists(source_node.id, target_node.id):
+                    continue
+                    
+                # Check if connection should be created
+                probability = self.growth_laws.calculate_connection_probability(
+                    source_node, target_node, self)
+                
+                if np.random.random() < probability:
+                    # Calculate initial strength
+                    strength = self.growth_laws.calculate_initial_connection_strength(
+                        source_node, target_node)
+                    
+                    # Create connection
+                    self.create_connection(source_node.id, target_node.id, strength)
+                    
+                checks_count += 1
+                
+    def process_mutations(self):
+        """Process random mutations for nodes"""
+        # Skip if no nodes
+        if not self.nodes:
+            return
+            
+        # Check each node for mutation
+        for node in self.nodes.values():
+            if self.core_laws.should_mutate(node):
+                self._mutate_node(node)
+                
+    def _mutate_node(self, node: BaseNode):
+        """Apply random mutation to a node"""
+        # Choose random mutation type
+        mutation_type = np.random.choice([
+            "energy_boost",
+            "stability_shift",
+            "connection_strength_change",
+            "feature_perturbation"
+        ])
+        
+        if mutation_type == "energy_boost":
+            # Boost energy by 10-30%
+            boost = np.random.uniform(0.1, 0.3) * 100.0
+            node.energy = min(200.0, node.energy + boost)
+            logger.info(f"Node {node.id} mutated: energy boost +{boost:.1f}")
+            
+        elif mutation_type == "stability_shift":
+            # Shift stability by -0.2 to +0.2
+            shift = np.random.uniform(-0.2, 0.2)
+            node.stability = max(0.0, min(1.0, node.stability + shift))
+            logger.info(f"Node {node.id} mutated: stability shift {shift:.2f}")
+            
+        elif mutation_type == "connection_strength_change":
+            # Modify strength of a random connection
+            connections = self.get_connections_for_node(node.id)
+            if connections:
+                target_id = np.random.choice(list(connections.keys()))
+                # Change by -30% to +30%
+                change = np.random.uniform(-0.3, 0.3)
+                new_strength = max(0.1, min(1.0, connections[target_id] + change))
+                self.connections[node.id][target_id] = new_strength
+                
+                # Save to database
+                try:
+                    with db_manager as session:
+                        conn = session.query(NodeConnectionModel).filter(
+                            (NodeConnectionModel.source_id == node.id) & 
+                            (NodeConnectionModel.target_id == target_id)
+                        ).first()
+                        
+                        if conn:
+                            conn.strength = new_strength
+                except Exception as e:
+                    logger.error(f"Failed to update connection strength: {str(e)}")
+                    
+                logger.info(f"Node {node.id} mutated: connection to {target_id} strength changed to {new_strength:.2f}")
+                
+        elif mutation_type == "feature_perturbation":
+            # Perturb feature vector if exists
+            if "vector" in node.features and isinstance(node.features["vector"], list):
+                vector = node.features["vector"]
+                
+                # Add random noise to each element
+                for i in range(len(vector)):
+                    # Add -10% to +10% noise
+                    noise = np.random.uniform(-0.1, 0.1)
+                    vector[i] = max(0.0, min(1.0, vector[i] + noise))
+                    
+                # Update vector
+                node.features["vector"] = vector
+                logger.info(f"Node {node.id} mutated: feature vector perturbed")
+                
+        # Update last_updated timestamp
+        node.last_updated = datetime.utcnow()
+        
+        # Save to database
+        node.save_to_db()
+
+# =====================================================================
+# Memory Graph - Manages system memory and knowledge representation
+# =====================================================================
+
+class MemoryGraph:
+    """Manages system memory and knowledge representation"""
+    
+    def __init__(self):
+        """Initialize memory graph"""
+        self.memories = {}  # Dict of key -> memory data
+        self.decay_rate = 0.01  # Memory decay rate
+        self.importance_threshold = 0.2  # Minimum importance to keep memory
+        
+    def add_memory(self, key: str, value: Any, source_node_id: str = None, 
+                  importance: float = 0.5) -> bool:
+        """Add memory to the graph"""
+        # Normalize importance
+        importance = max(0.0, min(1.0, importance))
+        
+        # Create memory entry
+        memory = {
+            "key": key,
+            "value": value,
+            "source_node_id": source_node_id,
+            "importance": importance,
+            "created_at": datetime.utcnow().isoformat(),
+            "last_accessed": datetime.utcnow().isoformat(),
+            "access_count": 0
+        }
+        
+        # Add to memories dict
+        self.memories[key] = memory
+        
+        # Save to database
+        try:
+            with db_manager as session:
+                # Check if memory exists
+                mem_model = session.query(MemoryModel).filter(MemoryModel.key == key).first()
+                
+                if mem_model is None:
+                    # Create new memory
+                    mem_model = MemoryModel(
+                        key=key,
+                        value=value,
+                        source_node_id=source_node_id,
+                        importance=importance
+                    )
+                    session.add(mem_model)
+                else:
+                    # Update existing memory
+                    mem_model.value = value
+                    mem_model.source_node_id = source_node_id
+                    mem_model.importance = importance
+                    mem_model.last_accessed = datetime.utcnow()
+        except Exception as e:
+            logger.error(f"Failed to save memory {key}: {str(e)}")
+            return False
+            
+        return True
+        
+    def get_memory(self, key: str) -> Optional[Dict[str, Any]]:
+        """Get memory by key"""
+        # Check if memory exists
+        if key not in self.memories:
+            # Try to load from database
+            try:
+                with db_manager as session:
+                    mem_model = session.query(MemoryModel).filter(MemoryModel.key == key).first()
+                    
+                    if mem_model is not None:
+                        # Create memory entry
+                        memory = {
+                            "key": mem_model.key,
+                            "value": mem_model.value,
+                            "source_node_id": mem_model.source_node_id,
+                            "importance": mem_model.importance,
+                            "created_at": mem_model.created_at.isoformat(),
+                            "last_accessed": mem_model.last_accessed.isoformat(),
+                            "access_count": mem_model.access_count
+                        }
+                        
+                        # Add to memories dict
+                        self.memories[key] = memory
+                    else:
+                        return None
+            except Exception as e:
+                logger.error(f"Failed to load memory {key}: {str(e)}")
+                return None
+                
+        # Access memory
+        memory = self.memories[key]
+        
+        # Update access time and count
+        memory["last_accessed"] = datetime.utcnow().isoformat()
+        memory["access_count"] += 1
+        
+        # Update in database
+        try:
+            with db_manager as session:
+                mem_model = session.query(MemoryModel).filter(MemoryModel.key == key).first()
+                
+                if mem_model is not None:
+                    mem_model.last_accessed = datetime.utcnow()
+                    mem_model.access_count += 1
+        except Exception as e:
+            logger.error(f"Failed to update memory access {key}: {str(e)}")
+            
+        return memory
+        
+    def delete_memory(self, key: str) -> bool:
+        """Delete memory by key"""
+        # Check if memory exists
+        if key not in self.memories:
+            return False
+            
+        # Delete from memories dict
+        del self.memories[key]
+        
+        # Delete from database
+        try:
+            with db_manager as session:
+                session.query(MemoryModel).filter(MemoryModel.key == key).delete()
+        except Exception as e:
+            logger.error(f"Failed to delete memory {key}: {str(e)}")
+            return False
+            
+        return True
+        
+    def search_memories(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Search memories by query text"""
+        # Simple implementation - search for query in keys and string values
+        query = query.lower()
+        results = []
+        
+        # Load all memories from database
+        self._load_all_memories()
+        
+        for key, memory in self.memories.items():
+            score = 0
+            
+            # Check key
+            if query in key.lower():
+                score += 1
+                
+            # Check value if string
+            value = memory["value"]
+            if isinstance(value, str) and query in value.lower():
+                score += 1
+            elif isinstance(value, dict):
+                # Check dictionary values
+                for k, v in value.items():
+                    if isinstance(v, str) and query in v.lower():
+                        score += 0.5
+                        
+            # Add to results if score > 0
+            if score > 0:
+                results.append({
+                    **memory,
+                    "search_score": score
+                })
+                
+        # Sort by score (descending) and limit
+        results.sort(key=lambda x: x["search_score"], reverse=True)
+        return results[:limit]
+        
+    def _load_all_memories(self):
+        """Load all memories from database"""
+        try:
+            with db_manager as session:
+                memories = session.query(MemoryModel).all()
+                
+                for mem_model in memories:
+                    if mem_model.key not in self.memories:
+                        # Create memory entry
+                        self.memories[mem_model.key] = {
+                            "key": mem_model.key,
+                            "value": mem_model.value,
+                            "source_node_id": mem_model.source_node_id,
+                            "importance": mem_model.importance,
+                            "created_at": mem_model.created_at.isoformat(),
+                            "last_accessed": mem_model.last_accessed.isoformat(),
+                            "access_count": mem_model.access_count
+                        }
+        except Exception as e:
+            logger.error(f"Failed to load all memories: {str(e)}")
+            
+    def process_decay(self):
+        """Process memory decay - reduce importance of unused memories"""
+        # Load all memories
+        self._load_all_memories()
+        
+        # Current time
+        now = datetime.utcnow()
+        
+        # Process each memory
+        to_delete = []
+        
+        for key, memory in self.memories.items():
+            # Parse last accessed time
+            try:
+                last_accessed = datetime.fromisoformat(memory["last_accessed"])
+            except:
+                last_accessed = now
+                
+            # Calculate days since last access
+            days_since_access = (now - last_accessed).total_seconds() / (24 * 3600)
+            
+            # Calculate decay factor
+            decay_factor = self.decay_rate * days_since_access
+            
+            # Reduce importance
+            new_importance = memory["importance"] * (1 - decay_factor)
+            
+            # Check if below threshold
+            if new_importance < self.importance_threshold:
+                to_delete.append(key)
+            else:
+                # Update importance
+                memory["importance"] = new_importance
+                
+                # Update in database
+                try:
+                    with db_manager as session:
+                        mem_model = session.query(MemoryModel).filter(MemoryModel.key == key).first()
+                        
+                        if mem_model is not None:
+                            mem_model.importance = new_importance
+                except Exception as e:
+                    logger.error(f"Failed to update memory importance {key}: {str(e)}")
+                    
+        # Delete memories below threshold
+        for key in to_delete:
+            self.delete_memory(key)
+            
+        logger.info(f"Memory decay processed: {len(to_delete)} memories deleted")
+        
+    def get_all_memories(self) -> List[Dict[str, Any]]:
+        """Get all memories"""
+        # Load all memories
+        self._load_all_memories()
+        
+        # Sort by importance (descending)
+        memories = list(self.memories.values())
+        memories.sort(key=lambda x: x["importance"], reverse=True)
+        
+        return memories
+
+# =====================================================================
+# Pattern Recognition - Finds patterns in data and node behavior
+# =====================================================================
+
+class PatternRecognition:
+    """Finds patterns in data and node behavior"""
+    
+    def __init__(self, node_manager: NodeManager, memory_graph: MemoryGraph):
+        """Initialize pattern recognition"""
+        self.node_manager = node_manager
+        self.memory_graph = memory_graph
+        
+    def recognize_patterns(self) -> List[Dict[str, Any]]:
+        """Recognize patterns in the system"""
+        patterns = []
+        
+        # Analyze node distribution
+        node_distribution = self._analyze_node_distribution()
+        if node_distribution:
+            patterns.append(node_distribution)
+            
+        # Analyze energy flows
+        energy_flows = self._analyze_energy_flows()
+        if energy_flows:
+            patterns.append(energy_flows)
+            
+        # Analyze node clusters
+        node_clusters = self._analyze_node_clusters()
+        if node_clusters:
+            patterns.extend(node_clusters)
+            
+        # Store patterns in memory graph
+        for pattern in patterns:
+            # Generate unique key
+            key = f"pattern:{pattern['type']}:{uuid.uuid4()}"
+            
+            # Store in memory graph
+            self.memory_graph.add_memory(
+                key=key,
+                value=pattern,
+                importance=pattern.get("confidence", 0.5)
+            )
+            
+        return patterns
+        
+    def _analyze_node_distribution(self) -> Optional[Dict[str, Any]]:
+        """Analyze distribution of node types"""
+        # Get all nodes
+        nodes = self.node_manager.get_all_nodes()
+        
+        # Skip if less than 5 nodes
+        if len(nodes) < 5:
+            return None
+            
+        # Count node types
+        type_counts = {}
+        for node in nodes:
+            type_name = node.type.name
+            type_counts[type_name] = type_counts.get(type_name, 0) + 1
+            
+        # Calculate distribution percentages
+        total = len(nodes)
+        distribution = {t: count / total for t, count in type_counts.items()}
+        
+        # Look for significant imbalances
+        max_type = max(distribution.items(), key=lambda x: x[1])
+        min_type = min(distribution.items(), key=lambda x: x[1])
+        
+        # Check if distribution is skewed
+        if            return node
+        except Exception as e:
+            logger.error(f"Failed to load node {node_id}: {str(e)}")
+            return None
+        finally:
+            if should_close:
+                session.close()
+                
+# =====================================================================
+# LLM Integration - Unified client for language model services
+# =====================================================================
+
+class LLMClient:
+    """Unified client for interacting with various LLM providers"""
+    
+    def __init__(self, config: Dict[str, Any] = None):
+        """Initialize LLM client with configuration"""
+        if config is None:
+            self.config = config_manager.get_llm_config()
+        else:
+            self.config = config
+            
+        self.default_provider = self.config.get('default_provider', 'openai')
+        
+    def _get_provider_config(self, provider: str = None) -> Dict[str, Any]:
+        """Get configuration for a specific provider"""
+        if provider is None:
+            provider = self.default_provider
+            
+        providers = self.config.get('providers', {})
+        return providers.get(provider, {})
+        
+    def call(self, prompt: str, provider: str = None, model: str = None,
+            max_tokens: int = None, temperature: float = None,
+            system_message: str = None) -> Dict[str, Any]:
+        """Call LLM with prompt and return response"""
+        # Get provider (default if not specified)
+        if provider is None:
+            provider = self.default_provider
+            
+        # Get provider config
+        provider_config = self._get_provider_config(provider)
+        
+        # Set parameters with fallbacks
+        if model is None:
+            model = provider_config.get('default_model')
+        if max_tokens is None:
+            max_tokens = provider_config.get('max_tokens', 4096)
+        if temperature is None:
+            temperature = provider_config.get('temperature', 0.7)
+            
+        # Get API key if needed
+        api_key = None
+        api_key_env = provider_config.get('api_key_env')
+        if api_key_env:
+            api_key = os.environ.get(api_key_env)
+            
+        # Call appropriate provider
+        if provider == 'openai':
+            return self._call_openai(prompt, model, max_tokens, temperature, system_message, api_key)
+        elif provider == 'anthropic':
+            return self._call_anthropic(prompt, model, max_tokens, temperature, system_message, api_key)
+        elif provider == 'local':
+            return self._call_local(prompt, model, max_tokens, temperature, system_message, provider_config)
+        else:
+            raise ValueError(f"Unsupported provider: {provider}")
+            
+    def _call_openai(self, prompt: str, model: str, max_tokens: int, 
+                    temperature: float, system_message: str, api_key: str) -> Dict[str, Any]:
+        """Call OpenAI API"""
+        try:
+            import openai
+            
+            # Configure client
+            if api_key:
+                client = openai.OpenAI(api_key=api_key)
+            else:
+                client = openai.OpenAI()
+                
+            # Prepare messages
+            messages = []
+            if system_message:
+                messages.append({"role": "system", "content": system_message})
+            messages.append({"role": "user", "content": prompt})
+            
+            # Make API call
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature
+            )
+            
+            # Extract and return content
+            content = response.choices[0].message.content
+            
+            return {
+                "content": content,
+                "model": model,
+                "provider": "openai",
+                "tokens": {
+                    "prompt": response.usage.prompt_tokens,
+                    "completion": response.usage.completion_tokens,
+                    "total": response.usage.total_tokens
+                }
+            }
+        except Exception as e:
+            logger.error(f"OpenAI API call failed: {str(e)}")
+            return {
+                "error": str(e),
+                "content": f"Error calling OpenAI API: {str(e)}",
+                "provider": "openai",
+                "model": model
+            }
+            
+    def _call_anthropic(self, prompt: str, model: str, max_tokens: int, 
+                       temperature: float, system_message: str, api_key: str) -> Dict[str, Any]:
+        """Call Anthropic API"""
+        try:
+            import anthropic
+            
+            # Configure client
+            if api_key:
+                client = anthropic.Anthropic(api_key=api_key)
+            else:
+                client = anthropic.Anthropic()
+                
+            # Prepare system prompt
+            system = system_message if system_message else "You are Claude, a helpful AI assistant."
+            
+            # Make API call
+            response = client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                system=system,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            # Extract and return content
+            content = response.content[0].text
+            
+            return {
+                "content": content,
+                "model": model,
+                "provider": "anthropic",
+                "tokens": {
+                    "input": response.usage.input_tokens,
+                    "output": response.usage.output_tokens,
+                    "total": response.usage.input_tokens + response.usage.output_tokens
+                }
+            }
+        except Exception as e:
+            logger.error(f"Anthropic API call failed: {str(e)}")
+            return {
+                "error": str(e),
+                "content": f"Error calling Anthropic API: {str(e)}",
+                "provider": "anthropic",
+                "model": model
+            }
+            
+    def _call_local(self, prompt: str, model: str, max_tokens: int, 
+                   temperature: float, system_message: str, 
+                   provider_config: Dict[str, Any]) -> Dict[str, Any]:
+        """Call local API endpoint"""
+        try:
+            # Get API URL from config
+            api_url = provider_config.get('api_url', 'http://localhost:8000/v1')
+            
+            # Prepare data
+            data = {
+                "model": model,
+                "messages": [],
+                "max_tokens": max_tokens,
+                "temperature": temperature
+            }
+            
+            if system_message:
+                data["messages"].append({"role": "system", "content": system_message})
+                
+            data["messages"].append({"role": "user", "content": prompt})
+            
+            # Make API call
+            response = requests.post(
+                f"{api_url}/chat/completions",
+                headers={"Content-Type": "application/json"},
+                json=data
+            )
+            
+            # Check for errors
+            response.raise_for_status()
+            
+            # Parse response
+            result = response.json()
+            
+            # Extract content
+            content = result["choices"][0]["message"]["content"]
+            
+            return {
+                "content": content,
+                "model": model,
+                "provider": "local",
+                "tokens": result.get("usage", {})
+            }
+        except Exception as e:
+            logger.error(f"Local API call failed: {str(e)}")
+            return {
+                "error": str(e),
+                "content": f"Error calling local API: {str(e)}",
+                "provider": "local",
+                "model": model
+            }
+
+# =====================================================================
+# Specialized Node Types
+# =====================================================================
+
+class TextNode(BaseNode):
+    """Specialized node for text processing and analysis"""
+    
+    def __init__(self, node_id: str = None, name: str = None):
+        """Initialize TextNode"""
+        super().__init__(node_id, name, NodeType.TEXT)
+        self.text = ""
+        self.analysis_results = {}
+        self.llm_client = LLMClient()
+        
+        # Load spaCy for basic NLP tasks
+        try:
+            self.nlp = spacy.load("en_core_web_sm")
+        except:
+            # Try to download if not available
+            try:
+                import subprocess
+                subprocess.run([sys.executable, "-m", "spacy", "download", "en_core_web_sm"], 
+                              check=True)
+                self.nlp = spacy.load("en_core_web_sm")
+            except Exception as e:
+                logger.error(f"Failed to load spaCy model: {str(e)}")
+                self.nlp = None
+        
+    def set_text(self, text: str):
+        """Set text content for processing"""
+        self.text = text
+        # Clear previous analysis results
+        self.analysis_results = {}
+        # Update features
+        self._update_basic_features()
+        # Update last_updated timestamp
+        self.last_updated = datetime.utcnow()
+        
+    def _update_basic_features(self):
+        """Update basic text features using spaCy"""
+        if not self.text or not self.nlp:
+            return
+            
+        try:
+            # Process with spaCy
+            doc = self.nlp(self.text)
+            
+            # Extract basic features
+            features = {
+                "length": len(self.text),
+                "word_count": len([token for token in doc if not token.is_punct and not token.is_space]),
+                "sentence_count": len(list(doc.sents)),
+                "entities": [{"text": ent.text, "label": ent.label_} for ent in doc.ents]
+            }
+            
+            # Update node features
+            self.features.update(features)
+            
+            # Create feature vector
+            vector = [
+                features["length"] / 1000,  # Normalize length
+                features["word_count"] / 500,  # Normalize word count
+                features["sentence_count"] / 50  # Normalize sentence count
+            ]
+            
+            # Add entity type counts
+            entity_types = {}
+            for ent in features["entities"]:
+                entity_types[ent["label"]] = entity_types.get(ent["label"], 0) + 1
+                
+            # Add common entity types to vector
+            for ent_type in ["PERSON", "ORG", "GPE", "DATE", "CARDINAL"]:
+                vector.append(entity_types.get(ent_type, 0) / 10)  # Normalize count
+                
+            # Store vector in features
+            self.features["vector"] = vector
+            
+        except Exception as e:
+            logger.error(f"Error updating text features: {str(e)}")
+            
+    def analyze_sentiment(self) -> Dict[str, Any]:
+        """Analyze sentiment of text"""
+        # Check if already analyzed
+        if "sentiment" in self.analysis_results:
+            return self.analysis_results["sentiment"]
+            
+        # Check if text is empty
+        if not self.text:
+            return {"positive": 0.0, "negative": 0.0, "neutral": 1.0}
+            
+        try:
+            # Use LLM for sentiment analysis
+            prompt = f"""Analyze the sentiment of the following text. Return a JSON object with 
+            scores for positive, negative, and neutral sentiment (values from 0 to 1, sum = 1).
+            
+            Text: "{self.text[:1000]}..."
+            
+            JSON response:"""
+            
+            response = self.llm_client.call(
+                prompt=prompt,
+                system_message="You are a sentiment analysis tool. Respond only with valid JSON."
+            )
+            
+            # Parse JSON from response
+            content = response.get("content", "")
+            try:
+                # Extract JSON if it's wrapped in text
+                if content.strip().startswith("{") and content.strip().endswith("}"):
+                    json_str = content.strip()
+                else:
+                    # Try to find JSON block
+                    import re
+                    json_match = re.search(r'\{.*\}', content, re.DOTALL)
+                    if json_match:
+                        json_str = json_match.group(0)
+                    else:
+                        raise ValueError("No JSON found in response")
+                        
+                sentiment = json.loads(json_str)
+                
+                # Validate sentiment values
+                for key in ["positive", "negative", "neutral"]:
+                    if key not in sentiment:
+                        sentiment[key] = 0.0
+                    sentiment[key] = float(sentiment[key])
+                    
+                # Normalize if sum is not 1
+                total = sum(sentiment.values())
+                if total > 0:
+                    for key in sentiment:
+                        sentiment[key] /= total
+                        
+                # Store results
+                self.analysis_results["sentiment"] = sentiment
+                
+                # Update features
+                self.features["sentiment"] = sentiment
+                
+                return sentiment
+            except Exception as e:
+                logger.error(f"Failed to parse sentiment JSON: {str(e)}")
+                # Fallback to basic sentiment
+                return {"positive": 0.3, "negative": 0.2, "neutral": 0.5}
+                
+        except Exception as e:
+            logger.error(f"Error analyzing sentiment: {str(e)}")
+            return {"positive": 0.3, "negative": 0.2, "neutral": 0.5}
+            
+    def extract_topics(self, num_topics: int = 3) -> List[str]:
+        """Extract main topics from text"""
+        # Check if already extracted
+        if "topics" in self.analysis_results:
+            return self.analysis_results["topics"]
+            
+        # Check if text is empty
+        if not self.text:
+            return []
+            
+        try:
+            # Use LLM for topic extraction
+            prompt = f"""Extract the top {num_topics} topics from the following text.
+            Respond with just a JSON array of strings.
+            
+            Text: "{self.text[:1500]}..."
+            
+            JSON response:"""
+            
+            response = self.llm_client.call(
+                prompt=prompt,
+                system_message="You are a topic extraction tool. Respond only with valid JSON."
+            )
+            
+            # Parse JSON from response
+            content = response.get("content", "")
+            try:
+                # Extract JSON if it's wrapped in text
+                if content.strip().startswith("[") and content.strip().endswith("]"):
+                    json_str = content.strip()
+                else:
+                    # Try to find JSON block
+                    import re
+                    json_match = re.search(r'\[.*\]', content, re.DOTALL)
+                    if json_match:
+                        json_str = json_match.group(0)
+                    else:
+                        raise ValueError("No JSON found in response")
+                        
+                topics = json.loads(json_str)
+                
+                # Ensure topics are strings
+                topics = [str(topic) for topic in topics]
+                
+                # Store results
+                self.analysis_results["topics"] = topics
+                
+                # Update features
+                self.features["topics"] = topics
+                
+                return topics
+            except Exception as e:
+                logger.error(f"Failed to parse topics JSON: {str(e)}")
+                # Fallback to entity extraction
+                if self.nlp and self.text:
+                    doc = self.nlp(self.text[:5000])
+                    common_nouns = {}
+                    for token in doc:
+                        if token.pos_ == "NOUN" and not token.is_stop:
+                            common_nouns[token.lemma_] = common_nouns.get(token.lemma_, 0) + 1
+                    
+                    # Get top nouns
+                    topics = sorted(common_nouns.keys(), key=lambda x: common_nouns[x], reverse=True)[:num_topics]
+                    self.analysis_results["topics"] = topics
+                    self.features["topics"] = topics
+                    return topics
+                return []
+                
+        except Exception as e:
+            logger.error(f"Error extracting topics: {str(e)}")
+            return []
+            
+    def summarize(self, max_length: int = 200) -> str:
+        """Generate a summary of the text"""
+        # Check if already summarized
+        if "summary" in self.analysis_results:
+            return self.analysis_results["summary"]
+            
+        # Check if text is empty or too short
+        if not self.text or len(self.text) < max_length:
+            return self.text
+            
+        try:
+            # Use LLM for summarization
+            prompt = f"""Summarize the following text in {max_length} characters or less:
+            
+            {self.text[:3000]}...
+            
+            Summary:"""
+            
+            response = self.llm_client.call(
+                prompt=prompt,
+                system_message="You are a summarization tool."
+            )
+            
+            # Get summary from response
+            summary = response.get("content", "").strip()
+            
+            # Ensure max length
+            if len(summary) > max_length:
+                summary = summary[:max_length-3] + "..."
+                
+            # Store result
+            self.analysis_results["summary"] = summary
+            
+            # Update features
+            self.features["summary"] = summary
+            
+            return summary
+                
+        except Exception as e:
+            logger.error(f"Error summarizing text: {str(e)}")
+            # Fallback to simple extraction
+            return self.text[:max_length-3] + "..."
+            
+    def process(self) -> Dict[str, Any]:
+        """Process text node to extract insights"""
+        results = super().process()
+        
+        # Skip if no text
+        if not self.text:
+            return results
+            
+        # Perform analyses if not already done
+        if "sentiment" not in self.analysis_results:
+            self.analyze_sentiment()
+            
+        if "topics" not in self.analysis_results:
+            self.extract_topics()
+            
+        if "summary" not in self.analysis_results and len(self.text) > 300:
+            self.summarize()
+            
+        # Add results
+        results.update({
+            "text_length": len(self.text),
+            "analyses": self.analysis_results
+        })
+        
+        return results
+        
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary with text-specific fields"""
+        data = super().to_dict()
+        data.update({
+            "text": self.text[:100] + "..." if len(self.text) > 100 else self.text,
+            "analysis_results": self.analysis_results
+        })
+        return data
+        
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'TextNode':
+        """Create TextNode from dictionary"""
+        node = super(TextNode, cls).from_dict(data)
+        
+        # Set text-specific fields
+        if "text" in data:
+            node.text = data["text"]
+        if "analysis_results" in data:
+            node.analysis_results = data["analysis_results"]
+            
+        return node
+
+class VisualNode(BaseNode):
+    """Specialized node for visual processing and analysis"""
+    
+    def __init__(self, node_id: str = None, name: str = None):
+        """Initialize VisualNode"""
+        super().__init__(node_id, name, NodeType.VISUAL)
+        self.image_path = None
+        self.image = None  # PIL Image
+        self.cv_image = None  # OpenCV image
+        self.analysis_results = {}
+        self.llm_client = LLMClient()
+        
+    def load_image(self, path: str) -> bool:
+        """Load image from path"""
+        try:
+            # Load with PIL
+            self.image = Image.open(path)
+            self.image_path = path
+            
+            # Convert to OpenCV format
+            self.cv_image = cv2.cvtColor(np.array(self.image), cv2.COLOR_RGB2BGR)
+            
+            # Update basic features
+            self._update_basic_features()
+            
+            # Update timestamp
+            self.last_updated = datetime.utcnow()
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error loading image: {str(e)}")
+            return False
+            
+    def load_image_from_bytes(self, image_bytes: bytes) -> bool:
+        """Load image from bytes"""
+        try:
+            # Create temporary file
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                tmp.write(image_bytes)
+                tmp_path = tmp.name
+                
+            # Load from temp file
+            success = self.load_image(tmp_path)
+            
+            # Clean up
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
+                
+            return success
+        except Exception as e:
+            logger.error(f"Error loading image from bytes: {str(e)}")
+            return False
+            
+    def _update_basic_features(self):
+        """Update basic image features"""
+        if self.image is None:
+            return
+            
+        try:
+            # Extract basic features
+            width, height = self.image.size
+            
+            # Calculate aspect ratio
+            aspect_ratio = width / height
+            
+            # Extract color information
+            if self.image.mode == 'RGB' or self.image.mode == 'RGBA':
+                # Get average color
+                rgb_image = self.image.convert('RGB')
+                pixels = list(rgb_image.getdata())
+                avg_r = sum(p[0] for p in pixels) / len(pixels)
+                avg_g = sum(p[1] for p in pixels) / len(pixels)
+                avg_b = sum(p[2] for p in pixels) / len(pixels)
+                
+                # Calculate brightness
+                brightness = (0.299 * avg_r + 0.587 * avg_g + 0.114 * avg_b) / 255.0
+                
+                # Calculate color variance (simple measure)
+                r_var = sum((p[0] - avg_r) ** 2 for p in pixels) / len(pixels)
+                g_var = sum((p[1] - avg_g) ** 2 for p in pixels) / len(pixels)
+                b_var = sum((p[2] - avg_b) ** 2 for p in pixels) / len(pixels)
+                color_variance = (r_var + g_var + b_var) / 3
+                
+                # Normalize color variance
+                color_variance = min(1.0, color_variance / 10000)
+            else:
+                # Grayscale image
+                avg_r, avg_g, avg_b = 128, 128, 128
+                brightness = sum(list(self.image.getdata())) / (len(list(self.image.getdata())) * 255)
+                color_variance = 0.0
+                
+            # Extract edge information using OpenCV
+            if self.cv_image is not None:
+                # Convert to grayscale
+                gray = cv2.cvtColor(self.cv_image, cv2.COLOR_BGR2GRAY)
+                
+                # Detect edges
+                edges = cv2.Canny(gray, 100, 200)
+                
+                # Calculate edge density
+                edge_density = np.sum(edges > 0) / (width * height)
+            else:
+                edge_density = 0.0
+                
+            # Create feature dictionary
+            features = {
+                "width": width,
+                "height": height,
+                "aspect_ratio": aspect_ratio,
+                "avg_color": [float(avg_r), float(avg_g), float(avg_b)],
+                "brightness": float(brightness),
+                "color_variance": float(color_variance),
+                "edge_density": float(edge_density)
+            }
+            
+            # Update node features
+            self.features.update(features)
+            
+            # Create feature vector
+            vector = [
+                width / 1000,  # Normalize width
+                height / 1000,  # Normalize height
+                aspect_ratio,
+                avg_r / 255,
+                avg_g / 255,
+                avg_b / 255,
+                brightness,
+                color_variance,
+                edge_density
+            ]
+            
+            # Store vector in features
+            self.features["vector"] = vector
+            
+        except Exception as e:
+            logger.error(f"Error updating image features: {str(e)}")
+            
+    def detect_objects(self) -> List[Dict[str, Any]]:
+        """Detect objects in the image"""
+        # Check if already analyzed
+        if "objects" in self.analysis_results:
+            return self.analysis_results["objects"]
+            
+        # Check if image is loaded
+        if self.cv_image is None:
+            return []
+            
+        try:
+            # For now, use basic OpenCV techniques
+            # A more advanced implementation would use a pre-trained model like YOLO
+            
+            # Convert to grayscale
+            gray = cv2.cvtColor(self.cv_image, cv2.COLOR_BGR2GRAY)
+            
+            # Apply threshold
+            _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+            
+            # Find contours
+            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            # Filter contours by size
+            min_area = (self.cv_image.shape[0] * self.cv_image.shape[1]) * 0.01  # 1% of image area
+            contours = [c for c in contours if cv2.contourArea(c) > min_area]
+            
+            # Create object entries
+            objects = []
+            for i, contour in enumerate(contours):
+                # Get bounding box
+                x, y, w, h = cv2.boundingRect(contour)
+                
+                # Calculate center
+                center_x = x + w / 2
+                center_y = y + h / 2
+                
+                # Create object entry
+                obj = {
+                    "id": i,
+                    "x": int(x),
+                    "y": int(y),
+                    "width": int(w),
+                    "height": int(h),
+                    "center": [float(center_x), float(center_y)],
+                    "area": float(cv2.contourArea(contour)),
+                    "confidence": float(min(1.0, cv2.contourArea(contour) / (w * h * 0.8)))
+                }
+                
+                objects.append(obj)
+                
+            # Store results
+            self.analysis_results["objects"] = objects
+            
+            # Update features
+            self.features["object_count"] = len(objects)
+            
+            return objects
+                
+        except Exception as e:
+            logger.error(f"Error detecting objects: {str(e)}")
+            return []
+            
+    def analyze_image_content(self) -> Dict[str, Any]:
+        """Analyze image content using LLM"""
+        # Check if already analyzed
+        if "content_analysis" in self.analysis_results:
+            return self.analysis_results["content_analysis"]
+            
+        # Check if image path is available
+        if not self.image_path:
+            return {}
+            
+        try:
+            # For now, provide a basic analysis based on extracted features
+            # Ideally, this would use a vision model or multimodal LLM
+            
+            analysis = {
+                "image_type": "unknown",
+                "scene_type": "unknown",
+                "main_colors": [],
+                "content_category": "unknown",
+                "description": "Image analysis not available"
+            }
+            
+            # Determine image type based on features
+            if "edge_density" in self.features:
+                if self.features["edge_density"] > 0.1:
+                    if "aspect_ratio" in self.features and self.features["aspect_ratio"] > 1.5:
+                        analysis["image_type"] = "landscape"
+                    elif "object_count" in self.features and self.features["object_count"] > 5:
+                        analysis["image_type"] = "complex scene"
+                    else:
+                        analysis["image_type"] = "photograph"
+                else:
+                    if "color_variance" in self.features and self.features["color_variance"] < 0.1:
+                        analysis["image_type"] = "solid color"
+                    else:
+                        analysis["image_type"] = "simple graphic"
+            
+            # Determine main colors
+            if "avg_color" in self.features:
+                r, g, b = self.features["avg_color"]
+                
+                # Simple color naming
+                colors = []
+                if r > 200 and g > 200 and b > 200:
+                    colors.append("white")
+                elif r < 50 and g < 50 and b < 50:
+                    colors.append("black")
+                else:
+                    if r > 150 and g < 100 and b < 100:
+                        colors.append("red")
+                    if r < 100 and g > 150 and b < 100:
+                        colors.append("green")
+                    if r < 100 and g < 100 and b > 150:
+                        colors.append("blue")
+                    if r > 150 and g > 150 and b < 100:
+                        colors.append("yellow")
+                    if r > 150 and g < 100 and b > 150:
+                        colors.append("purple")
+                    if r < 100 and g > 150 and b > 150:
+                        colors.append("cyan")
+                    
+                if not colors:
+                    if r > g and r > b:
+                        colors.append("reddish")
+                    elif g > r and g > b:
+                        colors.append("greenish")
+                    elif b > r and b > g:
+                        colors.append("bluish")
+                    else:
+                        colors.append("gray")
+                        
+                analysis["main_colors"] = colors
+                
+            # Determine brightness category
+            if "brightness" in self.features:
+                if self.features["brightness"] > 0.7:
+                    analysis["lighting"] = "bright"
+                elif self.features["brightness"] < 0.3:
+                    analysis["lighting"] = "dark"
+                else:
+                    analysis["lighting"] = "moderate"
+                    
+            # Store results
+            self.analysis_results["content_analysis"] = analysis
+            
+            # Update features
+            self.features["content_analysis"] = {
+                "image_type": analysis["image_type"],
+                "main_colors": analysis["main_colors"]
+            }
+            
+            return analysis
+                
+        except Exception as e:
+            logger.error(f"Error analyzing image content: {str(e)}")
+            return {}
+            
+    def process(self) -> Dict[str, Any]:
+        """Process visual node to extract insights"""
+        results = super().process()
+        
+        # Skip if no image
+        if self.image is None:
+            return results
+            
+        # Perform analyses if not already done
+        if "objects" not in self.analysis_results:
+            self.detect_objects()
+            
+        if "content_analysis" not in self.analysis_results:
+            self.analyze_image_content()
+            
+        # Add results
+        results.update({
+            "image_path": self.image_path,
+            "image_size": self.image.size if self.image else None,
+            "analyses": self.analysis_results
+        })
+        
+        return results
+        
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary with visual-specific fields"""
+        data = super().to_dict()
+        data.update({
+            "image_path": self.image_path,
+            "image_size": self.image.size if self.image else None,
+            "analysis_results": self.analysis_results
+        })
+        return data
+        
+    @classmethod
+    def from_dict(cls, data#!/usr/bin/env python3
+"""
+quantum_kaleidoscope_core.py - Core implementation of the Quantum Kaleidoscope / Unravel AI system
+"""
+
+import os
+import sys
+import json
+import uuid
+import time
+import logging
+import threading
+import traceback
+from pathlib import Path
+from typing import Dict, List, Any, Optional, Union, Callable, Tuple
+from enum import Enum, auto
+from dataclasses import dataclass, field
+from concurrent.futures import ThreadPoolExecutor, Future
+import asyncio
+import numpy as np
+from datetime import datetime
+import queue
+
+# Setup virtual environment (will be skipped if already activated)
+def setup_virtual_environment():
+    """Set up and activate virtual environment if not already activated"""
+    try:
+        # Check if we're already in a virtual environment
+        if sys.prefix == sys.base_prefix:
+            venv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qk_venv")
+            
+            # Create virtual environment if it doesn't exist
+            if not os.path.exists(venv_path):
+                import subprocess
+                print(f"Creating virtual environment at {venv_path}...")
+                subprocess.check_call([sys.executable, "-m", "venv", venv_path])
+            
+            # Construct the activation script path based on the OS
+            if sys.platform == "win32":
+                activate_script = os.path.join(venv_path, "Scripts", "activate.bat")
+                cmd = f"call {activate_script} && python {__file__}"
+            else:  # Unix-like systems (Linux, macOS)
+                activate_script = os.path.join(venv_path, "bin", "activate")
+                cmd = f"source {activate_script} && python {__file__}"
+            
+            # Execute the activation and rerun this script
+            print(f"Activating virtual environment and restarting script...")
+            os.system(cmd)
+            sys.exit(0)
+        else:
+            # Already in virtual environment, ensure all dependencies are installed
+            import importlib
+            
+            required_packages = [
+                "numpy", "requests", "pillow", "opencv-python", "torch", 
+                "transformers", "spacy", "sqlalchemy", "flask", "fastapi", 
+                "uvicorn", "openai", "anthropic", "pyyaml", "networkx",
+                "matplotlib", "scipy", "scikit-learn", "pytest"
+            ]
+            
+            missing_packages = []
+            for package in required_packages:
+                try:
+                    importlib.import_module(package)
+                except ImportError:
+                    missing_packages.append(package)
+            
+            if missing_packages:
+                import subprocess
+                print(f"Installing missing packages: {', '.join(missing_packages)}")
+                subprocess.check_call([sys.executable, "-m", "pip", "install"] + missing_packages)
+                
+                # Restart script to ensure all imports work
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    except Exception as e:
+        print(f"Error setting up virtual environment: {str(e)}")
+        traceback.print_exc()
+        sys.exit(1)
+
+# Run setup before proceeding
+setup_virtual_environment()
+
+# Now we can safely import external dependencies
+import requests
+import torch
+import numpy as np
+from PIL import Image
+import cv2
+import spacy
+from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, ForeignKey, DateTime, JSON
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, relationship
+import networkx as nx
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("quantum_kaleidoscope.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger("QuantumKaleidoscope")
+
+# =====================================================================
+# Core Constants and Enums
+# =====================================================================
+
+class NodeType(Enum):
+    BASE = auto()
+    TEXT = auto()
+    VISUAL = auto()
+    DATA = auto()
+    CAPABILITY = auto()
+    SUPER = auto()
+    
+class NodeState(Enum):
+    DORMANT = auto()
+    ACTIVE = auto()
+    LEARNING = auto()
+    RESONATING = auto()
+    STABLE = auto()
+    UNSTABLE = auto()
+    
+class TaskPriority(Enum):
+    LOW = 0
+    NORMAL = 50
+    HIGH = 100
+    CRITICAL = 200
+
+class TaskStatus(Enum):
+    PENDING = auto()
+    RUNNING = auto()
+    COMPLETED = auto()
+    FAILED = auto()
+    CANCELED = auto()
+    
+# =====================================================================
+# Configuration Management
+# =====================================================================
+
+class ConfigManager:
+    """Manages system-wide configuration and settings"""
+    
+    def __init__(self, config_path: str = "config.json"):
+        self.config_path = config_path
+        self.config = self._load_config()
+        self.llm_config = self._load_llm_config()
+        
+    def _load_config(self) -> Dict[str, Any]:
+        """Load main configuration or create default if not exists"""
+        try:
+            if os.path.exists(self.config_path):
+                with open(self.config_path, 'r') as f:
+                    return json.load(f)
+            else:
+                # Default configuration
+                default_config = {
+                    "system": {
+                        "name": "Quantum Kaleidoscope",
+                        "version": "0.1.0",
+                        "max_workers": 4,
+                        "log_level": "INFO",
+                        "data_dir": "data",
+                        "database_uri": "sqlite:///quantum_kaleidoscope.db"
+                    },
+                    "node_manager": {
+                        "max_nodes": 100,
+                        "base_energy": 100.0,
+                        "energy_decay_rate": 0.05,
+                        "mutation_chance": 0.1,
+                        "stability_threshold": 0.7
+                    },
+                    "quantum_engine": {
+                        "entanglement_strength": 0.8,
+                        "coherence_threshold": 0.6,
+                        "tensor_dimensions": [64, 64, 16]
+                    }
+                }
+                
+                # Create directory if it doesn't exist
+                os.makedirs(os.path.dirname(os.path.abspath(self.config_path)), exist_ok=True)
+                
+                # Save default config
+                with open(self.config_path, 'w') as f:
+                    json.dump(default_config, f, indent=2)
+                    
+                return default_config
+        except Exception as e:
+            logger.error(f"Failed to load config: {str(e)}")
+            return {}
+            
+    def _load_llm_config(self) -> Dict[str, Any]:
+        """Load LLM configuration or create default if not exists"""
+        llm_config_path = "llm_config.json"
+        try:
+            if os.path.exists(llm_config_path):
+                with open(llm_config_path, 'r') as f:
+                    return json.load(f)
+            else:
+                # Default LLM configuration
+                default_llm_config = {
+                    "default_provider": "openai",
+                    "providers": {
+                        "openai": {
+                            "api_key_env": "OPENAI_API_KEY",
+                            "default_model": "gpt-4-turbo",
+                            "max_tokens": 4096,
+                            "temperature": 0.7
+                        },
+                        "anthropic": {
+                            "api_key_env": "ANTHROPIC_API_KEY",
+                            "default_model": "claude-3-opus",
+                            "max_tokens": 4096,
+                            "temperature": 0.7
+                        },
+                        "local": {
+                            "api_url": "http://localhost:8000/v1",
+                            "default_model": "mistral-7b",
+                            "max_tokens": 2048,
+                            "temperature": 0.7
+                        }
+                    }
+                }
+                
+                # Save default LLM config
+                with open(llm_config_path, 'w') as f:
+                    json.dump(default_llm_config, f, indent=2)
+                    
+                return default_llm_config
+        except Exception as e:
+            logger.error(f"Failed to load LLM config: {str(e)}")
+            return {}
+    
+    def get(self, key: str, default: Any = None) -> Any:
+        """Get configuration value using dot notation, e.g., 'system.name'"""
+        try:
+            keys = key.split('.')
+            value = self.config
+            for k in keys:
+                value = value[k]
+            return value
+        except (KeyError, TypeError):
+            return default
+            
+    def get_llm_config(self, provider: str = None) -> Dict[str, Any]:
+        """Get LLM configuration for a specific provider or default provider"""
+        if not provider:
+            provider = self.llm_config.get("default_provider", "openai")
+            
+        return self.llm_config.get("providers", {}).get(provider, {})
+
+# Global config instance
+config_manager = ConfigManager()
+
+# =====================================================================
+# Database Models
+# =====================================================================
+
+Base = declarative_base()
+
+class NodeModel(Base):
+    """Database model for persisting nodes"""
+    __tablename__ = 'nodes'
+    
+    id = Column(String, primary_key=True)
+    type = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    energy = Column(Float, default=100.0)
+    stability = Column(Float, default=1.0)
+    state = Column(String, default="DORMANT")
+    features = Column(JSON, default=dict)
+    
+    # Relationships
+    connections = relationship("NodeConnectionModel", back_populates="source_node",
+                               primaryjoin="NodeModel.id==NodeConnectionModel.source_id",
+                               cascade="all, delete-orphan")
+
+class NodeConnectionModel(Base):
+    """Database model for connections between nodes"""
+    __tablename__ = 'node_connections'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_id = Column(String, ForeignKey('nodes.id'), nullable=False)
+    target_id = Column(String, ForeignKey('nodes.id'), nullable=False)
+    strength = Column(Float, default=0.5)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    source_node = relationship("NodeModel", back_populates="connections",
+                               foreign_keys=[source_id])
+
+class MemoryModel(Base):
+    """Database model for system memory entries"""
+    __tablename__ = 'memories'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    key = Column(String, nullable=False)
+    value = Column(JSON, nullable=False)
+    source_node_id = Column(String, ForeignKey('nodes.id'), nullable=True)
+    importance = Column(Float, default=0.5)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_accessed = Column(DateTime, default=datetime.utcnow)
+    access_count = Column(Integer, default=0)
+
+class TaskModel(Base):
+    """Database model for tasks"""
+    __tablename__ = 'tasks'
+    
+    id = Column(String, primary_key=True)
+    type = Column(String, nullable=False)
+    status = Column(String, default="PENDING")
+    priority = Column(Integer, default=50)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    parameters = Column(JSON, default=dict)
+    result = Column(JSON, nullable=True)
+    error = Column(String, nullable=True)
+    
+class SoftwareModel(Base):
+    """Database model for analyzed software"""
+    __tablename__ = 'software'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String, nullable=False)
+    path = Column(String, nullable=False)
+    analysis_status = Column(String, default="PENDING")
+    analysis_result = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+# Create database engine and session
+engine = create_engine(config_manager.get('system.database_uri', 'sqlite:///quantum_kaleidoscope.db'))
+Base.metadata.create_all(engine)
+SessionLocal = sessionmaker(bind=engine)
+
+# =====================================================================
+# Database Access Layer
+# =====================================================================
+
+class DatabaseManager:
+    """Manages database operations and provides context management"""
+    
+    def __init__(self):
+        self.engine = engine
+        self.SessionLocal = SessionLocal
+        
+    def get_session(self):
+        """Get a new database session"""
+        return self.SessionLocal()
+        
+    def __enter__(self):
+        """Context manager entry"""
+        self.session = self.SessionLocal()
+        return self.session
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit"""
+        if exc_type is not None:
+            self.session.rollback()
+            logger.error(f"Database error: {str(exc_val)}")
+        else:
+            try:
+                self.session.commit()
+            except Exception as e:
+                self.session.rollback()
+                logger.error(f"Failed to commit: {str(e)}")
+        self.session.close()
+
+# Global database manager instance
+db_manager = DatabaseManager()
+
+# =====================================================================
+# Core Laws - Energy, Stability, and Growth Rules
+# =====================================================================
+
+class CoreLaws:
+    """Implements core system laws governing node behavior, energy flow, and stability"""
+    
+    def __init__(self, config: Dict[str, Any] = None):
+        if config is None:
+            self.config = {
+                'base_energy': config_manager.get('node_manager.base_energy', 100.0),
+                'energy_decay_rate': config_manager.get('node_manager.energy_decay_rate', 0.05),
+                'mutation_chance': config_manager.get('node_manager.mutation_chance', 0.1),
+                'stability_threshold': config_manager.get('node_manager.stability_threshold', 0.7)
+            }
+        else:
+            self.config = config
+            
+    def calculate_energy_transfer(self, source_node: 'BaseNode', target_node: 'BaseNode', 
+                                 connection_strength: float) -> float:
+        """Calculate energy transfer between two connected nodes"""
+        # Energy transfer is influenced by:
+        # - Connection strength
+        # - Source node's available energy
+        # - Target node's current state
+        # - Energy differential between nodes
+        
+        # Calculate energy differential (normalize to 0-1 range)
+        energy_diff = max(0, min(1, (source_node.energy - target_node.energy) / 
+                                  (self.config['base_energy'] * 2)))
+        
+        # Calculate transfer amount
+        base_transfer = source_node.energy * 0.1 * connection_strength
+        state_modifier = 1.0
+        
+        # Adjust based on node states
+        if source_node.state == NodeState.RESONATING:
+            state_modifier *= 1.5
+        elif source_node.state == NodeState.DORMANT:
+            state_modifier *= 0.3
+            
+        if target_node.state == NodeState.LEARNING:
+            state_modifier *= 1.2
+        elif target_node.state == NodeState.UNSTABLE:
+            state_modifier *= 0.7
+            
+        # Calculate final transfer amount
+        transfer_amount = base_transfer * state_modifier * energy_diff
+        
+        # Ensure source has enough energy
+        transfer_amount = min(transfer_amount, source_node.energy * 0.9)
+        
+        return transfer_amount
+    
+    def calculate_energy_decay(self, node: 'BaseNode', time_delta: float) -> float:
+        """Calculate natural energy decay for a node over time"""
+        # Base decay rate adjusted by node state and stability
+        base_decay = self.config['energy_decay_rate'] * time_delta
+        
+        # Adjust based on node state
+        state_modifier = 1.0
+        if node.state == NodeState.DORMANT:
+            state_modifier = 0.5  # Dormant nodes decay slower
+        elif node.state == NodeState.ACTIVE:
+            state_modifier = 1.2  # Active nodes decay faster
+        elif node.state == NodeState.RESONATING:
+            state_modifier = 1.5  # Resonating nodes decay faster
+            
+        # Adjust based on stability (more stable = slower decay)
+        stability_modifier = 2.0 - node.stability
+        
+        # Calculate final decay amount
+        decay_amount = node.energy * base_decay * state_modifier * stability_modifier
+        
+        # Ensure we don't decay below 0
+        decay_amount = min(decay_amount, node.energy)
+        
+        return decay_amount
+    
+    def calculate_stability_change(self, node: 'BaseNode', activity_level: float) -> float:
+        """Calculate stability change based on node activity and state"""
+        # Base stability change (negative for high activity, positive for low activity)
+        base_change = 0.05 * (0.5 - activity_level)
+        
+        # Adjust based on node state
+        state_modifier = 1.0
+        if node.state == NodeState.LEARNING:
+            state_modifier = 0.5  # Learning nodes have slower stability changes
+        elif node.state == NodeState.UNSTABLE:
+            state_modifier = 1.5  # Unstable nodes have more dramatic stability changes
+            
+        # Calculate final stability change
+        stability_change = base_change * state_modifier
+        
+        # Limit change to reasonable bounds
+        stability_change = max(-0.2, min(0.2, stability_change))
+        
+        # Ensure we stay within 0-1 range
+        new_stability = node.stability + stability_change
+        if new_stability < 0:
+            stability_change = -node.stability
+        elif new_stability > 1:
+            stability_change = 1 - node.stability
+            
+        return stability_change
+    
+    def should_mutate(self, node: 'BaseNode') -> bool:
+        """Determine if a node should undergo random mutation"""
+        # Base mutation chance
+        chance = self.config['mutation_chance']
+        
+        # Adjust based on node stability and energy
+        # Less stable nodes mutate more often
+        stability_factor = 2.0 - node.stability
+        
+        # Low energy nodes mutate less often
+        energy_factor = min(1.0, node.energy / self.config['base_energy'])
+        
+        # Calculate final mutation probability
+        mutation_probability = chance * stability_factor * energy_factor
+        
+        # Ensure reasonable bounds
+        mutation_probability = max(0.001, min(0.3, mutation_probability))
+        
+        # Random roll
+        return np.random.random() < mutation_probability
+    
+    def update_node_state(self, node: 'BaseNode') -> NodeState:
+        """Determine the appropriate state for a node based on its properties"""
+        # Determine state based on energy, stability, and features
+        
+        # Very low energy = dormant
+        if node.energy < 10:
+            return NodeState.DORMANT
+            
+        # Unstable node
+        if node.stability < self.config['stability_threshold']:
+            return NodeState.UNSTABLE
+            
+        # Check for resonance (determined by node's resonance cycle if applicable)
+        if hasattr(node, 'is_resonating') and callable(getattr(node, 'is_resonating')):
+            if node.is_resonating():
+                return NodeState.RESONATING
+                
+        # Check for learning mode
+        if hasattr(node, 'is_learning') and callable(getattr(node, 'is_learning')):
+            if node.is_learning():
+                return NodeState.LEARNING
+                
+        # Default to active if energized, stable if not
+        if node.energy > 50:
+            return NodeState.ACTIVE
+        else:
+            return NodeState.STABLE
+
+class GrowthLaws:
+    """Implements rules for system growth, node generation, and connection formation"""
+    
+    def __init__(self, config: Dict[str, Any] = None):
+        if config is None:
+            self.config = {
+                'max_nodes': config_manager.get('node_manager.max_nodes', 100),
+                'connection_distance_factor': 0.7,
+                'connection_type_similarity_bonus': 0.3,
+                'random_connection_chance': 0.05
+            }
+        else:
+            self.config = config
+            
+    def should_create_node(self, node_manager: 'NodeManager', 
+                           target_type: NodeType = None) -> bool:
+        """Determine if a new node should be created"""
+        # Check if we're below max nodes
+        if node_manager.node_count >= self.config['max_nodes']:
+            return False
+            
+        # Determine base probability based on current node count
+        # Lower probability as we approach max nodes
+        base_probability = 0.1 * (1 - (node_manager.node_count / self.config['max_nodes']))
+        
+        # Adjust based on overall system energy
+        avg_energy = node_manager.get_average_energy()
+        energy_factor = min(1.5, avg_energy / 100.0)
+        
+        # Adjust based on type distribution if target_type is specified
+        type_factor = 1.0
+        if target_type:
+            type_count = node_manager.get_node_count_by_type(target_type)
+            type_ratio = type_count / max(1, node_manager.node_count)
+            
+            # Favor underrepresented types
+            if type_ratio < 0.1:
+                type_factor = 2.0
+            elif type_ratio > 0.5:
+                type_factor = 0.5
+                
+        # Calculate final probability
+        probability = base_probability * energy_factor * type_factor
+        
+        # Random decision
+        return np.random.random() < probability
+        
+    def calculate_connection_probability(self, source_node: 'BaseNode', target_node: 'BaseNode',
+                                        node_manager: 'NodeManager') -> float:
+        """Calculate probability of forming a connection between two nodes"""
+        # Prevent self-connections
+        if source_node.id == target_node.id:
+            return 0.0
+            
+        # Base probability
+        base_probability = 0.3
+        
+        # Factor in node types - similar types connect more easily
+        type_similarity = 1.0
+        if source_node.type == target_node.type:
+            type_similarity += self.config['connection_type_similarity_bonus']
+            
+        # Factor in feature similarity if available
+        feature_similarity = 0.5  # Default neutral value
+        if (hasattr(source_node, 'features') and hasattr(target_node, 'features') and
+            source_node.features and target_node.features):
+            # Calculate cosine similarity if features are vector-like
+            if isinstance(source_node.features.get('vector'), list) and isinstance(target_node.features.get('vector'), list):
+                src_vec = np.array(source_node.features['vector'])
+                tgt_vec = np.array(target_node.features['vector'])
+                
+                # Normalize vectors
+                src_norm = np.linalg.norm(src_vec)
+                tgt_norm = np.linalg.norm(tgt_vec)
+                
+                if src_norm > 0 and tgt_norm > 0:
+                    cosine_sim = np.dot(src_vec, tgt_vec) / (src_norm * tgt_norm)
+                    feature_similarity = max(0, min(1, (cosine_sim + 1) / 2))  # Map from [-1,1] to [0,1]
+        
+        # Calculate probability
+        probability = base_probability * type_similarity * feature_similarity
+        
+        # Add small random chance for unexpected connections
+        if np.random.random() < self.config['random_connection_chance']:
+            probability = max(probability, 0.5)
+            
+        return min(1.0, probability)
+        
+    def calculate_initial_connection_strength(self, source_node: 'BaseNode', 
+                                             target_node: 'BaseNode') -> float:
+        """Calculate initial strength for a new connection"""
+        # Base strength
+        base_strength = 0.3
+        
+        # Type compatibility bonus
+        type_bonus = 0.0
+        if source_node.type == target_node.type:
+            type_bonus = 0.2
+        elif (source_node.type == NodeType.TEXT and target_node.type == NodeType.CAPABILITY) or \
+             (source_node.type == NodeType.CAPABILITY and target_node.type == NodeType.TEXT):
+            type_bonus = 0.1
+        elif (source_node.type == NodeType.VISUAL and target_node.type == NodeType.CAPABILITY) or \
+             (source_node.type == NodeType.CAPABILITY and target_node.type == NodeType.VISUAL):
+            type_bonus = 0.1
+            
+        # Energy factor - higher energy nodes form stronger connections
+        energy_factor = min(1.0, (source_node.energy + target_node.energy) / 200.0)
+        
+        # Calculate strength
+        strength = base_strength + type_bonus
+        strength *= energy_factor
+        
+        # Add randomness
+        strength += np.random.uniform(-0.1, 0.1)
+        
+        # Ensure bounds
+        return max(0.1, min(0.9, strength))
+
+# =====================================================================
+# Tensor Core - Quantum-Inspired Operations
+# =====================================================================
+
+class Tensor:
+    """Implements tensor operations for quantum-inspired processing"""
+    
+    def __init__(self, dimensions: List[int]):
+        """Initialize tensor with specified dimensions"""
+        self.dimensions = dimensions
+        self.data = np.zeros(dimensions)
+        self.coherence = 1.0
+        
+    def populate_random(self, coherence: float = 1.0):
+        """Populate tensor with random values with specified coherence"""
+        # Higher coherence = more structured randomness
+        self.coherence = coherence
+        
+        # Generate completely random tensor
+        random_tensor = np.random.random(self.dimensions)
+        
+        if coherence >= 1.0:
+            # Fully coherent - use structured patterns
+            # This creates a more organized tensor with visible patterns
+            indices = np.indices(self.dimensions)
+            pattern_tensor = np.zeros(self.dimensions)
+            
+            for i, idx in enumerate(indices):
+                # Create different frequency patterns for each dimension
+                pattern_tensor += np.sin(idx * (0.1 + i * 0.05))
+                
+            # Normalize to 0-1 range
+            pattern_tensor = (pattern_tensor - pattern_tensor.min()) / (pattern_tensor.max() - pattern_tensor.min())
+            
+            # Use the pattern tensor
+            self.data = pattern_tensor
+        elif coherence <= 0.0:
+            # Fully incoherent - use pure randomness
+            self.data = random_tensor
+        else:
+            # Mix random and pattern based on coherence
+            indices = np.indices(self.dimensions)
+            pattern_tensor = np.zeros(self.dimensions)
+            
+            for i, idx in enumerate(indices):
+                pattern_tensor += np.sin(idx * (0.1 + i * 0.05))
+                
+            # Normalize pattern
+            pattern_tensor = (pattern_tensor - pattern_tensor.min()) / (pattern_tensor.max() - pattern_tensor.min())
+            
+            # Mix based on coherence
+            self.data = (coherence * pattern_tensor) + ((1 - coherence) * random_tensor)
+    
+    def from_features(self, features: Dict[str, Any], dimensions: List[int] = None):
+        """Create tensor from node features"""
+        if dimensions:
+            self.dimensions = dimensions
+            self.data = np.zeros(dimensions)
+        
+        # Extract numeric features into a vector
+        feature_vector = []
+        
+        if 'vector' in features and isinstance(features['vector'], list):
+            # Already have a feature vector
+            feature_vector = features['vector']
+        else:
+            # Extract numeric values from features
+            for key, value in features.items():
+                if isinstance(value, (int, float)):
+                    feature_vector.append(value)
+                elif isinstance(value, list) and all(isinstance(x, (int, float)) for x in value):
+                    feature_vector.extend(value)
+        
+        # Ensure vector is not empty
+        if not feature_vector:
+            self.populate_random(0.5)
+            return
+            
+        # Normalize vector
+        feature_vector = np.array(feature_vector)
+        if len(feature_vector) > 0:
+            feature_vector = (feature_vector - np.min(feature_vector)) / (np.max(feature_vector) - np.min(feature_vector) + 1e-9)
+        
+        # Map feature vector to tensor
+        # This is a simplistic mapping - more sophisticated mappings could be implemented
+        if len(self.dimensions) == 3:
+            # For 3D tensor, populate first slice completely, then use repeating/decaying pattern
+            vector_len = len(feature_vector)
+            slice_size = self.dimensions[1] * self.dimensions[2]
+            
+            if vector_len >= slice_size:
+                # Fill first slice with features
+                first_slice = feature_vector[:slice_size].reshape(self.dimensions[1], self.dimensions[2])
+                self.data[0] = first_slice
+                
+                # Fill remaining slices with transformed versions
+                for i in range(1, self.dimensions[0]):
+                    decay = 0.9 ** i
+                    rotation = i * 0.1
+                    
+                    # Create transformed version of first slice
+                    self.data[i] = decay * np.rot90(first_slice, int(rotation * 4))
+            else:
+                # Not enough features, repeat and interpolate
+                repeated = np.tile(feature_vector, (slice_size // vector_len) + 1)[:slice_size]
+                first_slice = repeated.reshape(self.dimensions[1], self.dimensions[2])
+                self.data[0] = first_slice
+                
+                # Fill remaining slices with transformed versions
+                for i in range(1, self.dimensions[0]):
+                    decay = 0.9 ** i
+                    self.data[i] = decay * first_slice
+                    
+    def entangle_with(self, other_tensor: 'Tensor', strength: float = 0.5) -> 'Tensor':
+        """Entangle this tensor with another, creating a new entangled tensor"""
+        # Ensure tensors have same dimensions
+        if self.dimensions != other_tensor.dimensions:
+            raise ValueError("Cannot entangle tensors of different dimensions")
+            
+        # Create new tensor for result
+        result = Tensor(self.dimensions)
+        
+        # Entanglement operation - weighted combination with non-linear interactions
+        result.data = (1 - strength) * self.data + strength * other_tensor.data
+        
+        # Add non-linear interaction terms to create entanglement effects
+        # This creates patterns that weren't in either original tensor
+        interaction = np.sin(self.data * 3.14159) * np.cos(other_tensor.data * 3.14159)
+        result.data += strength * 0.2 * interaction
+        
+        # Normalize result
+        result.data = (result.data - result.data.min()) / (result.data.max() - result.data.min() + 1e-9)
+        
+        # Calculate coherence based on input coherences and strength
+        result.coherence = (self.coherence + other_tensor.coherence) / 2
+        
+        return result
+        
+    def collapse_to_vector(self) -> np.ndarray:
+        """Collapse tensor to a feature vector"""
+        # For 3D tensor, use dimensionality reduction
+        if len(self.dimensions) == 3:
+            # Extract key statistics from each slice
+            result = []
+            
+            # Get statistics from each slice
+            for i in range(self.dimensions[0]):
+                slice_data = self.data[i]
+                # Add mean, std, min, max, median for each slice
+                result.extend([
+                    np.mean(slice_data),
+                    np.std(slice_data),
+                    np.min(slice_data),
+                    np.max(slice_data),
+                    np.median(slice_data)
+                ])
+                
+            # Add some higher-order statistics for the whole tensor
+            result.extend([
+                np.mean(self.data),
+                np.std(self.data),
+                self.coherence
+            ])
+            
+            return np.array(result)
+        
+        # For other dimensions, flatten and use PCA or other reduction
+        else:
+            flat_data = self.data.flatten()
+            # If too large, sample or use dimensionality reduction
+            if len(flat_data) > 100:
+                sample_indices = np.linspace(0, len(flat_data)-1, 100, dtype=int)
+                return flat_data[sample_indices]
+            else:
+                return flat_data
+
+class EntropyPool:
+    """Manages system entropy and provides methods for entropy-based operations"""
+    
+    def __init__(self, initial_entropy: float = 0.5, capacity: float = 1.0):
+        """Initialize entropy pool with initial entropy and capacity"""
+        self.entropy = initial_entropy
+        self.capacity = capacity
+        self.history = []  # Track entropy over time
+        
+    def add_entropy(self, amount: float) -> float:
+        """Add entropy to the pool, returns actual amount added"""
+        # Calculate how much we can add without exceeding capacity
+        addable = min(amount, self.capacity - self.entropy)
+        
+        # Add entropy
+        self.entropy += addable
+        
+        # Track history
+        self.history.append(self.entropy)
+        if len(self.history) > 100:
+            self.history = self.history[-100:]
+            
+        return addable
+        
+    def extract_entropy(self, amount: float) -> float:
+        """Extract entropy from the pool, returns actual amount extracted"""
+        # Calculate how much we can extract
+        extractable = min(amount, self.entropy)
+        
+        # Extract entropy
+        self.entropy -= extractable
+        
+        # Track history
+        self.history.append(self.entropy)
+        if len(self.history) > 100:
+            self.history = self.history[-100:]
+            
+        return extractable
+        
+    def get_entropy_rate(self) -> float:
+        """Calculate rate of entropy change based on recent history"""
+        if len(self.history) < 2:
+            return 0.0
+            
+        # Use last 10 points or all available
+        window = min(10, len(self.history))
+        recent = self.history[-window:]
+        
+        # Calculate average rate of change
+        changes = [recent[i] - recent[i-1] for i in range(1, len(recent))]
+        return sum(changes) / len(changes)
+        
+    def generate_random_with_bias(self, low: float = 0.0, high: float = 1.0, 
+                                 bias: float = 0.0) -> float:
+        """Generate random number biased by entropy level"""
+        # Entropy affects the randomness of the outcome
+        # High entropy = more uniform distribution
+        # Low entropy = more biased toward the bias value
+        
+        # Map bias from [low, high] to [0, 1]
+        normalized_bias = (bias - low) / (high - low) if high > low else 0.5
+        
+        # Generate base random value
+        r = np.random.random()
+        
+        # Apply entropy-based transformation
+        # As entropy approaches 0, result approaches bias
+        # As entropy approaches 1, result approaches original random value
+        transformed = (self.entropy * r) + ((1 - self.entropy) * normalized_bias)
+        
+        # Map from [0, 1] back to [low, high]
+        result = low + transformed * (high - low)
+        
+        return result
+
+class QuantumEngine:
+    """Implements quantum-inspired processing capabilities"""
+    
+    def __init__(self, config: Dict[str, Any] = None):
+        """Initialize quantum engine with configuration"""
+        if config is None:
+            self.config = {
+                'tensor_dimensions': config_manager.get('quantum_engine.tensor_dimensions', [64, 64, 16]),
+                'entanglement_strength': config_manager.get('quantum_engine.entanglement_strength', 0.8),
+                'coherence_threshold': config_manager.get('quantum_engine.coherence_threshold', 0.6)
+            }
+        else:
+            self.config = config
+            
+        # Initialize entropy pool
+        self.entropy_pool = EntropyPool()
+        
+        # Initialize node tensors dictionary
+        self.node_tensors = {}
+        
+        # Create system tensor
+        self.system_tensor = Tensor(self.config['tensor_dimensions'])
+        self.system_tensor.populate_random(coherence=0.8)
+        
+    def get_node_tensor(self, node_id: str) -> Optional[Tensor]:
+        """Get tensor for a node, creating it if it doesn't exist"""
+        if node_id in self.node_tensors:
+            return self.node_tensors[node_id]
+        else:
+            return None
+            
+    def create_node_tensor(self, node: 'BaseNode') -> Tensor:
+        """Create a new tensor for a node based on its features"""
+        tensor = Tensor(self.config['tensor_dimensions'])
+        
+        # If node has features, use them
+        if hasattr(node, 'features') and node.features:
+            tensor.from_features(node.features, self.config['tensor_dimensions'])
+        else:
+            # Otherwise create random tensor with coherence based on node type
+            coherence = 0.5  # Default
+            
+            # Adjust coherence based on node type
+            if node.type == NodeType.TEXT:
+                coherence = 0.7  # Text nodes tend to be more coherent
+            elif node.type == NodeType.VISUAL:
+                coherence = 0.6  # Visual nodes are moderately coherent
+            elif node.type == NodeType.SUPER:
+                coherence = 0.9  # Super nodes are highly coherent
+            elif node.type == NodeType.DATA:
+                coherence = 0.4  # Data nodes vary in coherence
+                
+            tensor.populate_random(coherence)
+            
+        # Store in dictionary
+        self.node_tensors[node.id] = tensor
+        
+        # Update system tensor
+        self.update_system_tensor()
+        
+        return tensor
+        
+    def update_node_tensor(self, node: 'BaseNode') -> Tensor:
+        """Update tensor for a node based on its current features"""
+        # Get existing tensor or create new one
+        if node.id in self.node_tensors:
+            tensor = self.node_tensors[node.id]
+        else:
+            tensor = Tensor(self.config['tensor_dimensions'])
+            
+        # Update from features if available
+        if hasattr(node, 'features') and node.features:
+            tensor.from_features(node.features, self.config['tensor_dimensions'])
+            
+        # Store updated tensor
+        self.node_tensors[node.id] = tensor
+        
+        # Update system tensor
+        self.update_system_tensor()
+        
+        return tensor
+        
+    def remove_node_tensor(self, node_id: str):
+        """Remove a node's tensor"""
+        if node_id in self.node_tensors:
+            del self.node_tensors[node_id]
+            
+            # Update system tensor
+            self.update_system_tensor()
+            
+    def entangle_nodes(self, source_id: str, target_id: str, strength: float) -> bool:
+        """Entangle two nodes' tensors"""
+        # Get source and target tensors
+        source_tensor = self.get_node_tensor(source_id)
+        target_tensor = self.get_node_tensor(target_id)
+        
+        # Ensure both tensors exist
+        if source_tensor is None or target_tensor is None:
+            return False
+            
+        # Perform entanglement
+        try:
+            # Create entangled tensor
+            entangled = source_tensor.entangle_with(target_tensor, strength)
+            
+            # Store result in target
+            self.node_tensors[target_id] = entangled
+            
+            # Extract entropy for this operation
+            self.entropy_pool.extract_entropy(0.05 * strength)
+            
+            return True
+        except Exception as e:
+            logger.error(f"Entanglement failed: {str(e)}")
+            return False
+            
+    def update_system_tensor(self):
+        """Update the system tensor based on all node tensors"""
+        if not self.node_tensors:
+            return
+            
+        # Start with random base tensor with moderate coherence
+        result = Tensor(self.config['tensor_dimensions'])
+        result.populate_random(0.5)
+        
+        # Combine all node tensors with equal weight
+        weight = 1.0 / len(self.node_tensors)
+        
+        for tensor in self.node_tensors.values():
+            # Add weighted contribution
+            result.data = (1 - weight) * result.data + weight * tensor.data
+            
+        # Apply non-linear transformation to create emergent patterns
+        result.data = 0.5 * (1 + np.sin(result.data * np.pi))
+        
+        # Calculate overall coherence as average of node coherences
+        avg_coherence = sum(t.coherence for t in self.node_tensors.values()) / len(self.node_tensors)
+        result.coherence = avg_coherence
+        
+        # Store result
+        self.system_tensor = result
+        
+    def calculate_resonance(self, node_id: str) -> float:
+        """Calculate resonance between a node and the system tensor"""
+        node_tensor = self.get_node_tensor(node_id)
+        
+        if node_tensor is None:
+            return 0.0
+            
+        # Calculate correlation between node tensor and system tensor
+        node_flat = node_tensor.data.flatten()
+        system_flat = self.system_tensor.data.flatten()
+        
+        # Use correlation coefficient as resonance measure
+        correlation = np.corrcoef(node_flat, system_flat)[0, 1]
+        
+        # Handle NaN
+        if np.isnan(correlation):
+            correlation = 0.0
+            
+        # Map from [-1, 1] to [0, 1]
+        resonance = (correlation + 1) / 2
+        
+        return resonance
+        
+    def process_quantum_effects(self, node_manager: 'NodeManager'):
+        """Process quantum effects for all nodes"""
+        # Skip if no nodes
+        if node_manager.node_count == 0:
+            return
+            
+        # Check coherence level of system tensor
+        system_coherence = self.system_tensor.coherence
+        
+        # Process each node
+        for node in node_manager.get_all_nodes():
+            # Calculate resonance
+            resonance = self.calculate_resonance(node.id)
+            
+            # Update node state based on resonance
+            if resonance > 0.8:
+                # High resonance - node becomes resonating if stable enough
+                if node.stability > self.config['coherence_threshold']:
+                    node.state = NodeState.RESONATING
+                    
+                    # High resonance and high stability can generate new connections
+                    self._try_generate_connections(node, node_manager, resonance)
+                    
+            elif resonance < 0.3:
+                # Low resonance with system - may become unstable
+                if np.random.random() < (0.3 - resonance) * 2:
+                    if node.state != NodeState.UNSTABLE:
+                        node.stability -= 0.1
+                        if node.stability < 0.3:
+                            node.state = NodeState.UNSTABLE
+            
+            # Update node tensor if needed
+            if node.state == NodeState.RESONATING:
+                # Resonating nodes slowly align more with system tensor
+                if node.id in self.node_tensors:
+                    node_tensor = self.node_tensors[node.id]
+                    # Slowly align with system tensor (20% blend)
+                    node_tensor.data = 0.8 * node_tensor.data + 0.2 * self.system_tensor.data
+                    # Increase coherence
+                    node_tensor.coherence = min(1.0, node_tensor.coherence + 0.05)
+                    
+            elif node.state == NodeState.UNSTABLE:
+                # Unstable nodes' tensors become more random
+                if node.id in self.node_tensors:
+                    node_tensor = self.node_tensors[node.id]
+                    # Add random noise
+                    noise = np.random.random(node_tensor.data.shape) * 0.3
+                    node_tensor.data = 0.7 * node_tensor.data + noise
+                    # Decrease coherence
+                    node_tensor.coherence = max(0.1, node_tensor.coherence - 0.1)
+            
+            # Update node features based on tensor
+            if node.id in self.node_tensors:
+                node_tensor = self.node_tensors[node.id]
+                # Extract feature vector from tensor
+                feature_vector = node_tensor.collapse_to_vector()
+                
+                # Store in node features if supported
+                if hasattr(node, 'features'):
+                    node.features['vector'] = feature_vector.tolist()
+                    node.features['resonance'] = resonance
+                    node.features['coherence'] = node_tensor.coherence
+        
+        # After processing all nodes, update system tensor
+        self.update_system_tensor()
+        
+        # Update entropy based on system coherence
+        # Higher coherence = lower entropy
+        entropy_change = 0.1 * (1 - system_coherence)
+        self.entropy_pool.add_entropy(entropy_change)
+            
+    def _try_generate_connections(self, node: 'BaseNode', node_manager: 'NodeManager', 
+                                resonance: float):
+        """Try to generate new connections based on resonance"""
+        # Skip if resonance not high enough
+        if resonance < 0.7:
+            return
+            
+        # Probability based on resonance
+        probability = (resonance - 0.7) / 0.3  # Scale 0.7-1.0 to 0-1
+        
+        # Check if we should generate connections
+        if np.random.random() > probability:
+            return
+            
+        # Find potential connection targets
+        all_nodes = node_manager.get_all_nodes()
+        potential_targets = [target for target in all_nodes 
+                          if target.id != node.id and not node_manager.connection_exists(node.id, target.id)]
+        
+        # Skip if no potential targets
+        if not potential_targets:
+            return
+            
+        # Choose a target based on system tensor similarity
+        target_scores = []
+        for target in potential_targets:
+            target_tensor = self.get_node_tensor(target.id)
+            if target_tensor is None:
+                target_scores.append(0.0)
+            else:
+                # Calculate similarity to system tensor
+                target_resonance = self.calculate_resonance(target.id)
+                # Similar resonance = better connection candidate
+                similarity = 1.0 - abs(resonance - target_resonance)
+                target_scores.append(similarity)
+                
+        # Normalize scores
+        if target_scores:
+            # Use entropy to determine randomness in selection
+            entropy = self.entropy_pool.entropy
+            
+            if entropy < 0.3:
+                # Low entropy - choose highest scoring
+                best_idx = np.argmax(target_scores)
+                selected_target = potential_targets[best_idx]
+                
+            else:
+                # Higher entropy - probabilistic selection
+                # Convert scores to probabilities
+                total = sum(target_scores)
+                if total > 0:
+                    probs = [score/total for score in target_scores]
+                    # Select based on probability
+                    selected_idx = np.random.choice(len(potential_targets), p=probs)
+                    selected_target = potential_targets[selected_idx]
+                else:
+                    # No scores - random selection
+                    selected_target = np.random.choice(potential_targets)
+            
+            # Create connection with strength based on resonance
+            strength = 0.5 + (resonance * 0.5)  # 0.5 to 1.0
+            node_manager.create_connection(node.id, selected_target.id, strength)
+
+# =====================================================================
+# Base Node Class - Foundation for all node types
+# =====================================================================
+
+class BaseNode:
+    """Base class for all nodes in the system"""
+    
+    def __init__(self, node_id: str = None, name: str = None, node_type: NodeType = NodeType.BASE):
+        """Initialize a new node"""
+        self.id = node_id if node_id else str(uuid.uuid4())
+        self.name = name if name else f"Node-{self.id[:8]}"
+        self.type = node_type
+        self.energy = 100.0
+        self.stability = 1.0
+        self.state = NodeState.DORMANT
+        self.features = {}
+        self.created_at = datetime.utcnow()
+        self.last_updated = datetime.utcnow()
+        
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert node to dictionary for serialization"""
+        return {
+            'id': self.id,
+            'name': self.name,
+            'type': self.type.name,
+            'energy': self.energy,
+            'stability': self.stability,
+            'state': self.state.name,
+            'features': self.features,
+            'created_at': self.created_at.isoformat(),
+            'last_updated': self.last_updated.isoformat()
+        }
+        
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'BaseNode':
+        """Create node from dictionary"""
+        # Create instance
+        node = cls(
+            node_id=data.get('id'),
+            name=data.get('name'),
+            node_type=NodeType[data.get('type', 'BASE')]
+        )
+        
+        # Set properties
+        node.energy = data.get('energy', 100.0)
+        node.stability = data.get('stability', 1.0)
+        node.state = NodeState[data.get('state', 'DORMANT')]
+        node.features = data.get('features', {})
+        
+        # Parse dates if provided
+        if 'created_at' in data:
+            try:
+                node.created_at = datetime.fromisoformat(data['created_at'])
+            except (ValueError, TypeError):
+                pass
+                
+        if 'last_updated' in data:
+            try:
+                node.last_updated = datetime.fromisoformat(data['last_updated'])
+            except (ValueError, TypeError):
+                pass
+                
+        return node
+        
+    def process(self) -> Dict[str, Any]:
+        """Process node (to be implemented by subclasses)"""
+        # Base implementation just returns node info
+        return {
+            'node_id': self.id,
+            'type': self.type.name,
+            'energy': self.energy,
+            'stability': self.stability,
+            'state': self.state.name
+        }
+        
+    def update_state(self, core_laws: CoreLaws):
+        """Update node state based on core laws"""
+        new_state = core_laws.update_node_state(self)
+        
+        # Only update if state changed
+        if new_state != self.state:
+            self.state = new_state
+            self.last_updated = datetime.utcnow()
+            
+    def is_resonating(self) -> bool:
+        """Determine if node is in resonance state"""
+        # Check if we have resonance info in features
+        if 'resonance' in self.features:
+            return self.features['resonance'] > 0.8
+        return False
+        
+    def is_learning(self) -> bool:
+        """Determine if node is in learning state"""
+        # Base implementation uses energy level as indicator
+        # High energy + moderate stability = learning
+        return self.energy > 70 and 0.4 <= self.stability <= 0.8
+        
+    def save_to_db(self, session = None):
+        """Save node to database"""
+        should_close = False
+        if session is None:
+            session = SessionLocal()
+            should_close = True
+            
+        try:
+            # Check if node exists
+            node_model = session.query(NodeModel).filter(NodeModel.id == self.id).first()
+            
+            if node_model is None:
+                # Create new node
+                node_model = NodeModel(
+                    id=self.id,
+                    type=self.type.name,
+                    name=self.name,
+                    energy=self.energy,
+                    stability=self.stability,
+                    state=self.state.name,
+                    features=self.features
+                )
+                session.add(node_model)
+            else:
+                # Update existing node
+                node_model.name = self.name
+                node_model.type = self.type.name
+                node_model.energy = self.energy
+                node_model.stability = self.stability
+                node_model.state = self.state.name
+                node_model.features = self.features
+                node_model.updated_at = datetime.utcnow()
+                
+            if should_close:
+                session.commit()
+                
+            return True
+        except Exception as e:
+            if should_close:
+                session.rollback()
+            logger.error(f"Failed to save node {self.id}: {str(e)}")
+            return False
+        finally:
+            if should_close:
+                session.close()
+                
+    @classmethod
+    def load_from_db(cls, node_id: str, session = None) -> Optional['BaseNode']:
+        """Load node from database"""
+        should_close = False
+        if session is None:
+            session = SessionLocal()
+            should_close = True
+            
+        try:
+            # Query node
+            node_model = session.query(NodeModel).filter(NodeModel.id == node_id).first()
+            
+            if node_model is None:
+                return None
+                
+            # Create node instance
+            node = cls(
+                node_id=node_model.id,
+                name=node_model.name,
+                node_type=NodeType[node_model.type]
+            )
+            
+            # Set properties
+            node.energy = node_model.energy
+            node.stability = node_model.stability
+            node.state = NodeState[node_model.state]
+            node.features = node_model.features
+            node.created_at = node_model.created_at
+            node.last_updated = node_model.updated_at
+            
+            return node
+        except Exception as e:
+            logger.error(f"Failed to load node {node_id}: {str(e)}")
+            return None
+        finally:
+            if should_close:
+                session.close()
+                
+# =====================================================================
+# LLM Integration - Unified client for language model services
+# =====================================================================
+
+class LLMClient:
+    """Unified client for interacting with various LLM providers"""
+    
+    def __init__(self, config: Dict[str, Any] = None):
+        """Initialize LLM client with configuration"""
+        if config is None:
+            self.config = config_manager.get_llm_config()
+        else:
+            self.config = config
+            
+        self.provider = self.config.get('default_provider', 'openai')
+        self.model = self.config.get('default_model', 'gpt-4-turbo')
+        self.max_tokens = self.config.get('max_tokens', 4096)
+        self.temperature
+    

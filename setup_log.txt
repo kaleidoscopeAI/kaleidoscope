@@ -1,0 +1,57 @@
+Kaleidoscope AI Setup Log (FORCED MODE V6) - 1744295757
+[2025-04-10 10:35:57] [INFO] Setup started in /home/jg/Music/include/kaleidoscope_project_organized
+[2025-04-10 10:35:57] [WARN] RUNNING WITH SUDO. Ownership reset to jg at end.
+[2025-04-10 10:35:57] [INFO] Checking Python...
+[2025-04-10 10:35:57] [INFO] Checking system deps...
+[2025-04-10 10:35:57] [INFO] Checking Python pkgs...
+[2025-04-10 10:35:57] [INFO] Auto-detecting tools...
+[2025-04-10 10:35:57] [INFO] Checking LLM model...
+[2025-04-10 10:35:57] [INFO] Setting up venv (as root)...
+[2025-04-10 10:36:01] [INFO] Venv activated (as root).
+[2025-04-10 10:36:01] [INFO] Installing dependencies (as root)...
+[2025-04-10 10:36:16] [INFO] Dependencies installed.
+[2025-04-10 10:36:16] [INFO] Generating initial config.json (as root)...
+[2025-04-10 10:36:16] [INFO] Generated initial config.json.
+[2025-04-10 10:36:16] [INFO] Checking/Resolving port conflicts...
+[2025-04-10 10:36:16] [DEBUG] Port 5000 appears free (checked with ss).
+[2025-04-10 10:36:16] [DEBUG] Port 8000 appears free (checked with ss).
+[2025-04-10 10:36:16] [DEBUG] Port 8081 appears free (checked with ss).
+[2025-04-10 10:36:16] [DEBUG] Port 8765 appears free (checked with ss).
+[2025-04-10 10:36:16] [DEBUG] Port 8081 appears free (checked with ss).
+[2025-04-10 10:36:16] [INFO] Updating config file with resolved ports...
+[2025-04-10 10:36:16] [DEBUG] Created backup of /home/jg/Music/include/kaleidoscope_project_organized/config.json at setup_backups/config.json.bak-1744295757
+[2025-04-10 10:36:16] [INFO] Updated /home/jg/Music/include/kaleidoscope_project_organized/config.json: Set web_interface.port (Python).
+[2025-04-10 10:36:16] [DEBUG] Created backup of /home/jg/Music/include/kaleidoscope_project_organized/config.json at setup_backups/config.json.bak-1744295757
+[2025-04-10 10:36:16] [INFO] Updated /home/jg/Music/include/kaleidoscope_project_organized/config.json: Set server.port (Python).
+[2025-04-10 10:36:16] [DEBUG] Created backup of /home/jg/Music/include/kaleidoscope_project_organized/config.json at setup_backups/config.json.bak-1744295757
+[2025-04-10 10:36:16] [INFO] Updated /home/jg/Music/include/kaleidoscope_project_organized/config.json: Set visualizer.port (Python).
+[2025-04-10 10:36:16] [DEBUG] Created backup of /home/jg/Music/include/kaleidoscope_project_organized/config.json at setup_backups/config.json.bak-1744295757
+[2025-04-10 10:36:16] [INFO] Updated /home/jg/Music/include/kaleidoscope_project_organized/config.json: Set quantum_sync.server_url (Python).
+[2025-04-10 10:36:16] [DEBUG] Created backup of /home/jg/Music/include/kaleidoscope_project_organized/config.json at setup_backups/config.json.bak-1744295757
+[2025-04-10 10:36:16] [INFO] Updated /home/jg/Music/include/kaleidoscope_project_organized/config.json: Set llm.api_base (Python).
+[2025-04-10 10:36:16] [INFO] Config file update attempt finished.
+[2025-04-10 10:36:16] [INFO] Installing project editable (as root)...
+[2025-04-10 10:36:19] [INFO] Project installed.
+[2025-04-10 10:36:19] [INFO] Performing syntax check...
+[2025-04-10 10:36:19] [INFO] Installation attempt finished.
+[2025-04-10 10:36:19] [INFO] Resetting ownership to jg:jg.
+[2025-04-10 10:36:19] [INFO] Attempting chown project: /home/jg/Music/include/kaleidoscope_project_organized
+[2025-04-10 10:36:20] [INFO] Attempting chown cache: /home/jg/.cache/unravel-ai/models
+[2025-04-10 10:36:20] [INFO] ====================================================================
+[2025-04-10 10:36:20] [INFO] Setup summary (forced mode):
+[2025-04-10 10:36:20] [INFO] - Project: /home/jg/Music/include/kaleidoscope_project_organized (Owner: jg)
+[2025-04-10 10:36:20] [INFO] - Venv: /home/jg/Music/include/kaleidoscope_project_organized/.venv
+[2025-04-10 10:36:20] [INFO] - Config: /home/jg/Music/include/kaleidoscope_project_organized/config.json (Check contents!)
+[2025-04-10 10:36:20] [INFO] - Log: /home/jg/Music/include/setup_log.txt
+[2025-04-10 10:36:20] [INFO] - Web Port: 5000
+[2025-04-10 10:36:20] [INFO] - API Port: 8000
+[2025-04-10 10:36:20] [INFO] - Vis Port: 8081
+[2025-04-10 10:36:20] [INFO] - LLM Port: 8081
+[2025-04-10 10:36:20] [INFO] - Quantum Port: 8765
+[2025-04-10 10:36:20] [INFO] ====================================================================
+[2025-04-10 10:36:20] [INFO] To run (as 'jg' in NEW terminal):
+[2025-04-10 10:36:20] [INFO] 1. cd /home/jg/Music/include/kaleidoscope_project_organized
+[2025-04-10 10:36:20] [INFO] 2. source .venv/bin/activate
+[2025-04-10 10:36:20] [INFO] 3. python main.py OR ./start_kaleidoscope.sh
+[2025-04-10 10:36:20] [INFO] ====================================================================
+[2025-04-10 10:36:20] [INFO] Creating startup script...

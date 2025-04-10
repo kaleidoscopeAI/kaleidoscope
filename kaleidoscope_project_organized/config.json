@@ -1,0 +1,17 @@
+{
+  "web_interface": {
+    "port": 5000
+  },
+  "server": {
+    "port": 8000
+  },
+  "visualizer": {
+    "port": 8081
+  },
+  "quantum_sync": {
+    "server_url": "ws://localhost:8765"
+  },
+  "llm": {
+    "api_base": "http://localhost:8081"
+  }
+}

@@ -1,0 +1,31 @@
+Kaleidoscope AI Setup Log - 1744289613
+[2025-04-10 08:53:33] [INFO] Setup started in /home/jg/Music/include/kaleidoscope_project_organized
+[2025-04-10 08:53:33] [INFO] Python version 3.12.3 found.
+[2025-04-10 08:53:33] [INFO] Checking system dependencies...
+[2025-04-10 08:53:33] [INFO] All essential build dependencies are installed.
+[2025-04-10 08:53:33] [INFO] Checking for essential Python packages...
+[2025-04-10 08:53:33] [INFO] Auto-detecting installed tools...
+[2025-04-10 08:53:33] [INFO] LLM model found at: /home/jg/.cache/unravel-ai/models/TheBloke_Mistral-7B-Instruct-v0.2-GGUF/mistral-7b-instruct-v0.2.Q4_K_M.gguf
+[2025-04-10 08:53:33] [INFO] Setting up Python virtual environment...
+[2025-04-10 08:53:33] [INFO] Virtual environment '.venv' already exists.
+[2025-04-10 08:53:33] [INFO] Virtual environment activated.
+[2025-04-10 08:53:33] [INFO] Installing Python dependencies from requirements.txt...
+[2025-04-10 08:53:35] [INFO] Python dependencies installed.
+[2025-04-10 08:53:35] [INFO] Generating initial config.json...
+[2025-04-10 08:53:35] [INFO] Generated initial config.json.
+[2025-04-10 08:53:35] [INFO] Checking and resolving port conflicts...
+[2025-04-10 08:53:35] [DEBUG] Port 5000 appears free (checked with ss).
+[2025-04-10 08:53:35] [INFO] Port 5000 (Web Interface) is free.
+[2025-04-10 08:53:35] [DEBUG] Port 8000 appears free (checked with ss).
+[2025-04-10 08:53:35] [INFO] Port 8000 (Backend API Server) is free.
+[2025-04-10 08:53:35] [DEBUG] Port 8081 appears free (checked with ss).
+[2025-04-10 08:53:35] [INFO] Port 8081 (Visualizer) is free.
+[2025-04-10 08:53:35] [DEBUG] Port 8765 appears free (checked with ss).
+[2025-04-10 08:53:35] [INFO] Port 8765 (Quantum Sync Server) is free.
+[2025-04-10 08:53:35] [DEBUG] Port 8081 appears free (checked with ss).
+[2025-04-10 08:53:35] [INFO] Port 8081 (Llama.cpp API) is free.
+[2025-04-10 08:53:35] [DEBUG] Created backup of /home/jg/Music/include/kaleidoscope_project_organized/config.json at setup_backups/config.json.bak-1744289613
+[2025-04-10 08:53:35] [ERROR] Failed to update /home/jg/Music/include/kaleidoscope_project_organized/config.json with web_interface.=[2025-04-10 08:53:35] [DEBUG] Port 5000 appears free (checked with ss).
+[2025-04-10 08:53:35] [INFO] Port 5000 (Web Interface) is free.
+5000 (Python error).
+[2025-04-10 08:53:35] [ERROR] Setup failed. Review 'setup_log.txt' for detailed information.

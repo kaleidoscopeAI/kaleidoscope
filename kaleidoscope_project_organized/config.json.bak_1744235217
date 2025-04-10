@@ -1,0 +1,123 @@
+{
+  "system": {
+    "dimension": 128,
+    "auto_discovery": true,
+    "max_active_nodes": 1000,
+    "mutation_interval": 10.0,
+    "error_handling": {
+      "enabled": true,
+      "retry_attempts": 3,
+      "retry_delay": 5,
+      "fallback_mode": "safe_defaults"
+    }
+  },
+  "paths": {
+    "data_dir": "./data",
+    "log_dir": "./logs",
+    "persistence_dir": "./data",
+    "model_cache": "/home/jg/.cache/unravel-ai/models",
+    "reconstruction_dir": "./reconstructed",
+    "applications_dir": "./applications",
+    "backup_dir": "./backups"
+  },
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8000,
+    "timeout": 30,
+    "error_handling": {
+      "enabled": true,
+      "graceful_shutdown": true
+    }
+  },
+  "visualizer": {
+    "port": 8081,
+    "error_tolerance": {
+      "reconnect_attempts": 3,
+      "timeout": 10
+    }
+  },
+  "llm": {
+    "provider": "llamacpp_api",
+    "model_id": "TheBloke/Mistral-7B-Instruct-v0.2-GGUF",
+    "model_file": "mistral-7b-instruct-v0.2.Q4_K_M.gguf",
+    "model_path": "/home/jg/.cache/unravel-ai/models/TheBloke_Mistral-7B-Instruct-v0.2-GGUF/mistral-7b-instruct-v0.2.Q4_K_M.gguf",
+    "api_base": "http://localhost:8081",
+    "n_ctx": 2048,
+    "default_model": "mistral",
+    "available_models": ["codellama", "llama2", "mistral", "phi"],
+    "temperature": 0.2,
+    "max_tokens": 4096,
+    "context_window": 8192,
+    "gpu_enabled": false,
+    "error_handling": {
+      "timeout": 30,
+      "max_retries": 3,
+      "fallback_to_cpu": true
+    }
+  },
+  "quantum_sync": {
+    "enable": true,
+    "server_url": "ws://localhost:8765",
+    "error_handling": {
+      "reconnect_attempts": 3,
+      "fallback_mode": "classical"
+    }
+  },
+  "sandbox": {
+    "enable": true,
+    "error_handling": {
+      "timeout_seconds": 60,
+      "resource_limits": {
+        "memory_mb": 2048,
+        "cpu_percent": 50
+      }
+    }
+  },
+  "tools": {
+    "radare2_path": "/usr/local/bin/r2",
+    "ghidra_path": "/home/jg/Music/include/kaleidoscope_project_organized/ghidra/ghidra_11.3.1_PUBLIC_20250219/ghidra_11.3.1_PUBLIC/server/ghidraSvr",
+    "retdec_path": "retdec-decompiler",
+    "js_beautify_path": "js-beautify",
+    "llama_server_path": "/home/jg/.local/bin/llama-server",
+    "ollama_path": "ollama",
+    "validate_paths": true
+  },
+  "max_workers": 4,
+  "logging": {
+    "level": "INFO",
+    "file": "./logs/kaleidoscope.log",
+    "console": true,
+    "rotation": {
+      "max_size_mb": 10,
+      "backup_count": 5
+    },
+    "error_reporting": {
+      "capture_stack_traces": true
+    }
+  },
+  "processing": {
+    "chunk_size": 4096,
+    "max_file_size": 100000000,
+    "error_handling": {
+      "retry_failed_chunks": true,
+      "skip_corrupt_files": false
+    }
+  },
+  "web_interface": {
+    "host": "127.0.0.1",
+    "port": 5000,
+    "enable_upload": true,
+    "max_upload_size": 50000000,
+    "error_handling": {
+      "timeout": 30,
+      "retry_uploads": true
+    }
+  },
+  "recovery": {
+    "enabled": true,
+    "auto_backup": {
+      "interval_minutes": 30,
+      "keep_count": 5
+    }
+  }
+}

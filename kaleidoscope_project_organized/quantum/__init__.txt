@@ -1,0 +1,26 @@
+"""
+Quantum Package for Kaleidoscope AI
+===================================
+
+Provides components for quantum-inspired computations, network synchronization,
+client interactions, and orchestration hubs within the Kaleidoscope system.
+"""
+
+# Expose key classes and functions for easier access
+from .quantum_sync_protocol import QuantumSynchronizationProtocol
+from .quantum_client import QuantumNetworkClient
+from .quantum_hub import QuantumOrchestrator, QuantumKaleidoscopeServer
+from .quantum_server import QuantumNetworkServer # Assuming quantum_server.py is also in this package
+
+__all__ = [
+    "QuantumSynchronizationProtocol",
+    "QuantumNetworkClient",
+    "QuantumOrchestrator",
+    "QuantumKaleidoscopeServer",
+    "QuantumNetworkServer",
+]
+
+# You can add package-level initialization code here if needed
+import logging
+logger = logging.getLogger(__name__)
+logger.debug("Quantum package initialized.")

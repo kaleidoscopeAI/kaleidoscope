@@ -1,0 +1,24 @@
+{
+  "system": { /* ... */ },
+  "paths": {
+    "data_dir": "./data", "log_dir": "./data/logs", "persistence_dir": "./data",
+    "model_cache": "/home/jg/.cache/unravel-ai/models/TheBloke_Mistral-7B-Instruct-v0.2-GGUF",
+    "reconstruction_dir": "./reconstructed", "applications_dir": "./applications"
+  },
+  "server": { "host": "0.0.0.0", "port": 8000 },
+  "visualizer": { "port": 8081 },
+  "llm": {
+    "provider": "llamacpp_api",
+    "model_id": "TheBloke/Mistral-7B-Instruct-v0.2-GGUF",
+    "model_file": "mistral-7b-instruct-v0.2.Q4_K_M.gguf",
+    "model_path": "/home/jg/.cache/unravel-ai/models/TheBloke_Mistral-7B-Instruct-v0.2-GGUF/mistral-7b-instruct-v0.2.Q4_K_M.gguf", # Use final path
+    "api_base": "http://localhost:8081",
+    "n_ctx": 2048, /* ... other llm settings ... */
+    "gpu_enabled": false
+  },
+  "quantum_sync": { "enable": true, "server_url": "ws://localhost:8765" },
+  "sandbox": { "enable": true },
+  "tools": { /* ... tool paths ... */ },
+  "max_workers": 4, "logging": { /* ... */ }, "processing": { /* ... */ },
+  "web_interface": { "host": "127.0.0.1", "port": 5000, /* ... */ }
+}

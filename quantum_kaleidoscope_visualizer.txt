@@ -1,0 +1,1577 @@
+                # Vector from node1 to node2
+                dx = node2_model.position[0] - node1_model.position[0]
+                dy = node2_model.position[1] - node1_model.position[1]
+                dz = node2_model.position[2] - node1_model.position[2]
+                
+                # Distance (with minimum to avoid division by zero)
+                distance = math.sqrt(dx*dx + dy*dy + dz*dz) + 0.001
+                
+                # Normalize direction
+                dx /= distance
+                dy /= distance
+                dz /= distance
+                
+                # Repulsion force (inverse square)
+                repulsion_force = self.repulsion / (distance * distance)
+                
+                # Add to force vector (negative for repulsion)
+                force[0] -= dx * repulsion_force
+                force[1] -= dy * repulsion_force
+                force[2] -= dz * repulsion_force
+                
+            # Store force for this node
+            forces[node1_id] = force
+            
+        # Attraction forces along connections
+        for (source_id, target_id), conn_model in self.connection_models.items():
+            source_model = self.node_models[source_id]
+            target_model = self.node_models[target_id]
+            
+            # Vector from source to target
+            dx = target_model.position[0] - source_model.position[0]
+            dy = target_model.position[1] - source_model.position[1]
+            dz = target_model.position[2] - source_model.position[2]
+            
+            # Distance
+            distance = math.sqrt(dx*dx + dy*dy + dz*dz) + 0.001
+            
+            # Normalize direction
+            dx /= distance
+            dy /= distance
+            dz /= distance
+            
+            # Attraction force (linear with distance and connection strength)
+            attraction_force = self.attraction * distance * conn_model.strength
+            
+            # Add to force vectors (positive for attraction)
+            if source_id in forces:
+                forces[source_id][0] += dx * attraction_force
+                forces[source_id][1] += dy * attraction_force
+                forces[source_id][2] += dz * attraction_force
+                
+            if target_id in forces:
+                forces[target_id][0] -= dx * attraction_force
+                forces[target_id][1] -= dy * attraction_force
+                forces[target_id][2] -= dz * attraction_force
+                
+        # Apply forces to update velocities and positions
+        for node_id, force in forces.items():
+            node_model = self.node_models[node_id]
+            
+            # Update velocity (with damping)
+            vx = node_model.velocity[0] * self.damping + force[0] * 0.05
+            vy = node_model.velocity[1] * self.damping + force[1] * 0.05
+            vz = node_model.velocity[2] * self.damping + force[2] * 0.05
+            
+            # Limit velocity
+            speed = math.sqrt(vx*vx + vy*vy + vz*vz)
+            max_speed = 0.2
+            if speed > max_speed:
+                vx = vx / speed * max_speed
+                vy = vy / speed * max_speed
+                vz = vz / speed * max_speed
+                
+            node_model.velocity = (vx, vy, vz)
+            
+            # Update position
+            x = node_model.position[0] + vx
+            y = node_model.position[1] + vy
+            z = node_model.position[2] + vz
+            
+            # Constrain to bounds
+            bound = 10.0
+            x = max(-bound, min(bound, x))
+            y = max(-bound, min(bound, y))
+            z = max(-bound, min(bound, z))
+            
+            node_model.position = (x, y, z)
+            
+    def mousePressEvent(self, event):
+        """Handle mouse press events"""
+        if event.button() == Qt.LeftButton:
+            self.last_mouse_pos = event.pos()
+            
+            # Check if a node was clicked
+            node_id = self._pick_node(event.pos())
+            if node_id:
+                self.select_node(node_id)
+                self.node_clicked.emit(node_id)
+                
+        elif event.button() == Qt.RightButton:
+            # Reset selection
+            self.select_node(None)
+            
+    def mouseMoveEvent(self, event):
+        """Handle mouse move events"""
+        if event.buttons() & Qt.LeftButton and self.last_mouse_pos:
+            # Calculate drag delta
+            dx = event.x() - self.last_mouse_pos.x()
+            dy = event.y() - self.last_mouse_pos.y()
+            
+            # Update camera angles
+            self.camera_azimuth += dx * 0.5
+            self.camera_elevation += dy * 0.5
+            
+            # Constrain elevation to prevent gimbal lock
+            self.camera_elevation = max(-89, min(89, self.camera_elevation))
+            
+            # Update last position
+            self.last_mouse_pos = event.pos()
+            
+            # Update display
+            self.update()
+            
+    def wheelEvent(self, event):
+        """Handle mouse wheel events"""
+        # Adjust camera distance
+        delta = event.angleDelta().y() / 120  # Number of steps
+        self.camera_distance -= delta * 0.5
+        
+        # Constrain distance
+        self.camera_distance = max(5, min(50, self.camera_distance))
+        
+        # Update display
+        self.update()
+        
+    def _pick_node(self, mouse_pos):
+        """Pick a node based on mouse position"""
+        # This is a simplified approach - not real ray casting
+        # In a real application, you'd use proper ray casting against the node geometries
+        
+        # Convert screen coordinates to normalized device coordinates
+        viewport = glGetIntegerv(GL_VIEWPORT)
+        x = 2.0 * mouse_pos.x() / viewport[2] - 1.0
+        y = 1.0 - 2.0 * mouse_pos.y() / viewport[3]
+        
+        # Get projection and modelview matrices
+        projection = glGetDoublev(GL_PROJECTION_MATRIX)
+        modelview = glGetDoublev(GL_MODELVIEW_MATRIX)
+        
+        # Get near and far points on the ray
+        near_point = gluUnProject(mouse_pos.x(), viewport[3] - mouse_pos.y(), 0.0)
+        far_point = gluUnProject(mouse_pos.x(), viewport[3] - mouse_pos.y(), 1.0)
+        
+        # Check distance to each node
+        closest_node = None
+        closest_distance = float('inf')
+        
+        for node_id, node_model in self.node_models.items():
+            # Calculate distance from ray to node center
+            pos = node_model.position
+            
+            # Vector from near point to node
+            dx = pos[0] - near_point[0]
+            dy = pos[1] - near_point[1]
+            dz = pos[2] - near_point[2]
+            
+            # Vector from near to far along ray
+            rx = far_point[0] - near_point[0]
+            ry = far_point[1] - near_point[1]
+            rz = far_point[2] - near_point[2]
+            
+            # Normalize ray direction
+            ray_length = math.sqrt(rx*rx + ry*ry + rz*rz)
+            rx /= ray_length
+            ry /= ray_length
+            rz /= ray_length
+            
+            # Project node vector onto ray
+            projection = dx*rx + dy*ry + dz*rz
+            
+            # Calculate closest point on ray
+            closest_x = near_point[0] + projection * rx
+            closest_y = near_point[1] + projection * ry
+            closest_z = near_point[2] + projection * rz
+            
+            # Distance from node to closest point
+            distance = math.sqrt((pos[0] - closest_x)**2 + 
+                                (pos[1] - closest_y)**2 + 
+                                (pos[2] - closest_z)**2)
+            
+            # Check if within node's radius (scaled by distance from camera)
+            node_screen_size = node_model.scale * 0.5 * viewport[2] / self.camera_distance
+            
+            if distance < node_model.scale * 1.5 and projection > 0:
+                if projection < closest_distance:
+                    closest_distance = projection
+                    closest_node = node_id
+                    
+        return closest_node
+        
+    def select_node(self, node_id):
+        """Select a node"""
+        # Reset previous selection
+        if self.selected_node_id in self.node_models:
+            self.node_models[self.selected_node_id].highlighted = False
+            
+            # Reset highlighted connections
+            for conn_key, conn_model in self.connection_models.items():
+                conn_model.highlighted = False
+                
+        # Set new selection
+        self.selected_node_id = node_id
+        
+        if node_id in self.node_models:
+            self.node_models[node_id].highlighted = True
+            
+            # Highlight connections to/from this node
+            for conn_key, conn_model in self.connection_models.items():
+                source_id, target_id = conn_key
+                if source_id == node_id or target_id == node_id:
+                    conn_model.highlighted = True
+                    
+        # Update display
+        self.update()
+        
+    def set_simulation(self, enabled):
+        """Enable or disable physics simulation"""
+        self.simulating = enabled
+        
+    def set_repulsion(self, value):
+        """Set repulsion force strength"""
+        self.repulsion = value
+        
+    def set_attraction(self, value):
+        """Set attraction force strength"""
+        self.attraction = value
+        
+    def set_damping(self, value):
+        """Set velocity damping factor"""
+        self.damping = value
+        
+    def reset_view(self):
+        """Reset camera to default view"""
+        self.camera_distance = 15.0
+        self.camera_azimuth = 45.0
+        self.camera_elevation = 30.0
+        self.camera_target = (0, 0, 0)
+        self.update()
+
+# =====================================================================
+# Tensor Visualization Widget
+# =====================================================================
+
+class TensorVisualizationWidget(QOpenGLWidget):
+    """OpenGL widget for visualizing quantum tensors"""
+    
+    def __init__(self, parent=None):
+        """Initialize the OpenGL widget"""
+        super().__init__(parent)
+        
+        # Set up OpenGL format
+        format = QSurfaceFormat()
+        format.setDepthBufferSize(24)
+        format.setSamples(4)  # Multisampling for antialiasing
+        self.setFormat(format)
+        
+        # Tensor data
+        self.tensor = None
+        self.dimensions = [0, 0, 0]
+        self.coherence = 0.0
+        
+        # Visualization settings
+        self.vis_mode = "volume"  # "volume", "slices", "isosurface"
+        self.colormap = "viridis"  # Colormap name
+        self.slice_index = 0
+        self.slice_axis = 0  # 0=x, 1=y, 2=z
+        self.threshold = 0.5  # For isosurface
+        
+        # Camera and view settings
+        self.rotation_x = 30.0
+        self.rotation_y = 45.0
+        self.zoom = 5.0
+        
+        # Interaction state
+        self.last_mouse_pos = None
+        
+        # Animation settings
+        self.animating = True
+        self.animation_phase = 0.0
+        
+        # Animation timer
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.animate)
+        self.timer.start(50)  # 20 FPS
+        
+    def initializeGL(self):
+        """Initialize OpenGL settings"""
+        # Set background color (dark blue-gray)
+        glClearColor(0.1, 0.1, 0.15, 1.0)
+        
+        # Enable depth testing
+        glEnable(GL_DEPTH_TEST)
+        glDepthFunc(GL_LESS)
+        
+        # Enable alpha blending
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        
+        # Enable antialiasing
+        glEnable(GL_LINE_SMOOTH)
+        glHint(GL_LINE_SMOOTH_HINT, GL_NICEST)
+        
+    def resizeGL(self, width, height):
+        """Handle widget resize events"""
+        # Update viewport
+        glViewport(0, 0, width, height)
+        
+        # Set up perspective projection
+        glMatrixMode(GL_PROJECTION)
+        glLoadIdentity()
+        aspect = width / height
+        gluPerspective(45, aspect, 0.1, 100.0)
+        
+        # Switch back to modelview matrix
+        glMatrixMode(GL_MODELVIEW)
+        
+    def paintGL(self):
+        """Paint the scene"""
+        # Clear buffers
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        
+        # Skip if no tensor data
+        if self.tensor is None:
+            self._draw_no_data_message()
+            return
+            
+        # Set up camera
+        glLoadIdentity()
+        
+        # Position camera
+        glTranslatef(0, 0, -self.zoom)
+        glRotatef(self.rotation_x, 1, 0, 0)
+        glRotatef(self.rotation_y, 0, 1, 0)
+        
+        # Center tensor
+        glTranslatef(-self.dimensions[0]/2, -self.dimensions[1]/2, -self.dimensions[2]/2)
+        
+        # Draw tensor based on visualization mode
+        if self.vis_mode == "volume":
+            self._draw_volume()
+        elif self.vis_mode == "slices":
+            self._draw_slices()
+        elif self.vis_mode == "isosurface":
+            self._draw_isosurface()
+            
+        # Draw bounding box
+        self._draw_bounding_box()
+        
+    def _draw_no_data_message(self):
+        """Draw a message when no tensor data is available"""
+        glMatrixMode(GL_PROJECTION)
+        glPushMatrix()
+        glLoadIdentity()
+        glOrtho(-1, 1, -1, 1, -1, 1)
+        
+        glMatrixMode(GL_MODELVIEW)
+        glPushMatrix()
+        glLoadIdentity()
+        
+        # Draw text (OpenGL doesn't have built-in text, so we'll use lines)
+        glColor3f(1, 1, 1)
+        glLineWidth(2.0)
+        
+        # Draw a simple "No Data" symbol (X)
+        glBegin(GL_LINES)
+        glVertex2f(-0.5, -0.5)
+        glVertex2f(0.5, 0.5)
+        glVertex2f(-0.5, 0.5)
+        glVertex2f(0.5, -0.5)
+        glEnd()
+        
+        glMatrixMode(GL_PROJECTION)
+        glPopMatrix()
+        
+        glMatrixMode(GL_MODELVIEW)
+        glPopMatrix()
+        
+    def _draw_volume(self):
+        """Draw tensor as volume rendering"""
+        # This is a simplified volume rendering approach
+        # A real implementation would use 3D textures or raycasting
+        
+        # We'll draw a series of transparent slices
+        num_slices = 64
+        
+        # Get tensor dimensions
+        x_dim, y_dim, z_dim = self.dimensions
+        
+        # Enable blending
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        
+        # Draw slices from back to front
+        for i in range(num_slices):
+            z = i * z_dim / num_slices
+            
+            glBegin(GL_QUADS)
+            for y in range(y_dim):
+                for x in range(x_dim):
+                    # Sample tensor at this position
+                    # This is an approximation - would interpolate in real implementation
+                    z_index = min(int(z), z_dim - 1)
+                    value = self.tensor[x, y, z_index]
+                    
+                    # Map value to color
+                    color = self._value_to_color(value)
+                    
+                    # Set color and alpha
+                    alpha = value * 0.1  # Low alpha for better transparency
+                    glColor4f(color[0], color[1], color[2], alpha)
+                    
+                    # Draw quad
+                    glVertex3f(x, y, z)
+                    glVertex3f(x+1, y, z)
+                    glVertex3f(x+1, y+1, z)
+                    glVertex3f(x, y+1, z)
+            glEnd()
+            
+    def _draw_slices(self):
+        """Draw tensor as 2D slices"""
+        # Determine which axis to slice along
+        if self.slice_axis == 0:  # X-axis
+            slice_data = self.tensor[self.slice_index, :, :]
+            width, height = self.dimensions[1], self.dimensions[2]
+            
+            glBegin(GL_QUADS)
+            for y in range(height):
+                for x in range(width):
+                    value = slice_data[x, y]
+                    color = self._value_to_color(value)
+                    glColor3f(color[0], color[1], color[2])
+                    
+                    # Draw quad at slice position
+                    glVertex3f(self.slice_index, x, y)
+                    glVertex3f(self.slice_index, x+1, y)
+                    glVertex3f(self.slice_index, x+1, y+1)
+                    glVertex3f(self.slice_index, x, y+1)
+            glEnd()
+            
+        elif self.slice_axis == 1:  # Y-axis
+            slice_data = self.tensor[:, self.slice_index, :]
+            width, height = self.dimensions[0], self.dimensions[2]
+            
+            glBegin(GL_QUADS)
+            for y in range(height):
+                for x in range(width):
+                    value = slice_data[x, y]
+                    color = self._value_to_color(value)
+                    glColor3f(color[0], color[1], color[2])
+                    
+                    # Draw quad at slice position
+                    glVertex3f(x, self.slice_index, y)
+                    glVertex3f(x+1, self.slice_index, y)
+                    glVertex3f(x+1, self.slice_index, y+1)
+                    glVertex3f(x, self.slice_index, y+1)
+            glEnd()
+            
+        else:  # Z-axis
+            slice_data = self.tensor[:, :, self.slice_index]
+            width, height = self.dimensions[0], self.dimensions[1]
+            
+            glBegin(GL_QUADS)
+            for y in range(height):
+                for x in range(width):
+                    value = slice_data[x, y]
+                    color = self._value_to_color(value)
+                    glColor3f(color[0], color[1], color[2])
+                    
+                    # Draw quad at slice position
+                    glVertex3f(x, y, self.slice_index)
+                    glVertex3f(x+1, y, self.slice_index)
+                    glVertex3f(x+1, y+1, self.slice_index)
+                    glVertex3f(x, y+1, self.slice_index)
+            glEnd()
+            
+    def _draw_isosurface(self):
+        """Draw tensor as isosurface"""
+        # This is a simplified isosurface rendering
+        # A real implementation would use marching cubes algorithm
+        
+        # We'll draw cubes where the value exceeds the threshold
+        x_dim, y_dim, z_dim = self.dimensions
+        
+        glBegin(GL_QUADS)
+        for z in range(z_dim):
+            for y in range(y_dim):
+                for x in range(x_dim):
+                    value = self.tensor[x, y, z]
+                    
+                    if value >= self.threshold:
+                        # Map value to color
+                        color = self._value_to_color(value)
+                        
+                        # Adjust alpha based on coherence and value
+                        alpha = min(1.0, value * self.coherence)
+                        glColor4f(color[0], color[1], color[2], alpha)
+                        
+                        # Draw cube faces
+                        # Front face
+                        glVertex3f(x, y, z)
+                        glVertex3f(x+1, y, z)
+                        glVertex3f(x+1, y+1, z)
+                        glVertex3f(x, y+1, z)
+                        
+                        # Back face
+                        glVertex3f(x, y, z+1)
+                        glVertex3f(x+1, y, z+1)
+                        glVertex3f(x+1, y+1, z+1)
+                        glVertex3f(x, y+1, z+1)
+                        
+                        # Top face
+                        glVertex3f(x, y+1, z)
+                        glVertex3f(x+1, y+1, z)
+                        glVertex3f(x+1, y+1, z+1)
+                        glVertex3f(x, y+1, z+1)
+                        
+                        # Bottom face
+                        glVertex3f(x, y, z)
+                        glVertex3f(x+1, y, z)
+                        glVertex3f(x+1, y, z+1)
+                        glVertex3f(x, y, z+1)
+                        
+                        # Left face
+                        glVertex3f(x, y, z)
+                        glVertex3f(x, y+1, z)
+                        glVertex3f(x, y+1, z+1)
+                        glVertex3f(x, y, z+1)
+                        
+                        # Right face
+                        glVertex3f(x+1, y, z)
+                        glVertex3f(x+1, y+1, z)
+                        glVertex3f(x+1, y+1, z+1)
+                        glVertex3f(x+1, y, z+1)
+        glEnd()
+        
+    def _draw_bounding_box(self):
+        """Draw bounding box around tensor"""
+        x_dim, y_dim, z_dim = self.dimensions
+        
+        glColor3f(1, 1, 1)
+        glLineWidth(1.0)
+        
+        # Draw box edges
+        glBegin(GL_LINES)
+        
+        # Bottom face
+        glVertex3f(0, 0, 0)
+        glVertex3f(x_dim, 0, 0)
+        
+        glVertex3f(x_dim, 0, 0)
+        glVertex3f(x_dim, y_dim, 0)
+        
+        glVertex3f(x_dim, y_dim, 0)
+        glVertex3f(0, y_dim, 0)
+        
+        glVertex3f(0, y_dim, 0)
+        glVertex3f(0, 0, 0)
+        
+        # Top face
+        glVertex3f(0, 0, z_dim)
+        glVertex3f(x_dim, 0, z_dim)
+        
+        glVertex3f(x_dim, 0, z_dim)
+        glVertex3f(x_dim, y_dim, z_dim)
+        
+        glVertex3f(x_dim, y_dim, z_dim)
+        glVertex3f(0, y_dim, z_dim)
+        
+        glVertex3f(0, y_dim, z_dim)
+        glVertex3f(0, 0, z_dim)
+        
+        # Connecting edges
+        glVertex3f(0, 0, 0)
+        glVertex3f(0, 0, z_dim)
+        
+        glVertex3f(x_dim, 0, 0)
+        glVertex3f(x_dim, 0, z_dim)
+        
+        glVertex3f(x_dim, y_dim, 0)
+        glVertex3f(x_dim, y_dim, z_dim)
+        
+        glVertex3f(0, y_dim, 0)
+        glVertex3f(0, y_dim, z_dim)
+        
+        glEnd()
+        
+    def _value_to_color(self, value):
+        """Map a scalar value to a color using the selected colormap"""
+        # Simple built-in colormaps
+        if self.colormap == "viridis":
+            # Viridis-like colormap
+            r = 0.4 * value**2
+            g = 0.4 + 0.6 * value
+            b = 0.7 * (1 - value) + 0.3 * value**2
+        elif self.colormap == "plasma":
+            # Plasma-like colormap
+            r = 0.5 + 0.5 * value
+            g = 0.2 * value
+            b = 0.5 * (1 - value**2)
+        elif self.colormap == "hot":
+            # Hot colormap (black-red-yellow-white)
+            r = min(1.0, value * 3)
+            g = max(0, min(1.0, value * 3 - 1))
+            b = max(0, min(1.0, value * 3 - 2))
+        elif self.colormap == "rainbow":
+            # Rainbow colormap
+            r = abs(1.5 - value * 3) % 1.0
+            g = abs(2.5 - value * 3) % 1.0
+            b = abs(3.5 - value * 3) % 1.0
+        else:
+            # Grayscale default
+            r = g = b = value
+            
+        return (r, g, b)
+        
+    def set_tensor(self, tensor: Tensor):
+        """Set tensor data for visualization"""
+        if tensor is None:
+            self.tensor = None
+            self.dimensions = [0, 0, 0]
+            self.coherence = 0.0
+            return
+            
+        # Store tensor data
+        self.tensor = tensor.data
+        self.dimensions = tensor.dimensions
+        self.coherence = tensor.coherence
+        
+        # Update slice index limits
+        self.slice_index = min(self.slice_index, self.dimensions[self.slice_axis] - 1)
+        
+        # Update display
+        self.update()
+        
+    def set_visualization_mode(self, mode: str):
+        """Set visualization mode"""
+        self.vis_mode = mode
+        self.update()
+        
+    def set_colormap(self, colormap: str):
+        """Set colormap"""
+        self.colormap = colormap
+        self.update()
+        
+    def set_slice_axis(self, axis: int):
+        """Set slice axis"""
+        self.slice_axis = axis
+        # Update slice index limit
+        self.slice_index = min(self.slice_index, self.dimensions[self.slice_axis] - 1)
+        self.update()
+        
+    def set_slice_index(self, index: int):
+        """Set slice index"""
+        self.slice_index = min(max(0, index), self.dimensions[self.slice_axis] - 1)
+        self.update()
+        
+    def set_threshold(self, threshold: float):
+        """Set isosurface threshold"""
+        self.threshold = threshold
+        self.update()
+        
+    def mousePressEvent(self, event):
+        """Handle mouse press events"""
+        if event.button() == Qt.LeftButton:
+            self.last_mouse_pos = event.pos()
+            
+    def mouseMoveEvent(self, event):
+        """Handle mouse move events"""
+        if event.buttons() & Qt.LeftButton and self.last_mouse_pos:
+            # Calculate drag delta
+            dx = event.x() - self.last_mouse_pos.x()
+            dy = event.y() - self.last_mouse_pos.y()
+            
+            # Update rotation angles
+            self.rotation_y += dx * 0.5
+            self.rotation_x += dy * 0.5
+            
+            # Constrain rotation x to prevent gimbal lock
+            self.rotation_x = max(-90, min(90, self.rotation_x))
+            
+            # Update last position
+            self.last_mouse_pos = event.pos()
+            
+            # Update display
+            self.update()
+            
+    def wheelEvent(self, event):
+        """Handle mouse wheel events"""
+        # Adjust zoom
+        delta = event.angleDelta().y() / 120  # Number of steps
+        self.zoom -= delta * 0.5
+        
+        # Constrain zoom
+        self.zoom = max(2, min(20, self.zoom))
+        
+        # Update display
+        self.update()
+        
+    def animate(self):
+        """Animate the visualization"""
+        if not self.animating or self.tensor is None:
+            return
+            
+        # Update animation phase
+        self.animation_phase += 0.05
+        if self.animation_phase > 2 * math.pi:
+            self.animation_phase -= 2 * math.pi
+            
+        # Apply subtle rotation
+        self.rotation_y += 0.2 * math.sin(self.animation_phase)
+        
+        # Update display
+        self.update()
+        
+    def set_animation(self, enabled: bool):
+        """Enable or disable animation"""
+        self.animating = enabled
+
+# =====================================================================
+# Main Application Window
+# =====================================================================
+
+class QuantumKaleidoscopeVisualizerApp(QMainWindow):
+    """Main application window for Quantum Kaleidoscope visualizer"""
+    
+    def __init__(self):
+        """Initialize main window"""
+        super().__init__()
+        
+        # Initialize AI Core
+        self.ai_core = None
+        self.update_timer = QTimer(self)
+        self.update_timer.timeout.connect(self.update_visualization)
+        
+        # Set up UI
+        self.init_ui()
+        
+        # Try to connect to AI Core
+        self.connect_to_ai_core()
+        
+    def init_ui(self):
+        """Initialize user interface"""
+        # Set window properties
+        self.setWindowTitle("Quantum Kaleidoscope Visualizer")
+        self.setMinimumSize(1200, 800)
+        
+        # Create main widget and layout
+        main_widget = QWidget()
+        self.setCentralWidget(main_widget)
+        main_layout = QVBoxLayout(main_widget)
+        
+        # Create tabs
+        tabs = QTabWidget()
+        main_layout.addWidget(tabs)
+        
+        # Create tabs for different visualizations
+        self.node_network_tab = QWidget()
+        self.tensor_tab = QWidget()
+        self.system_status_tab = QWidget()
+        
+        tabs.addTab(self.node_network_tab, "Node Network")
+        tabs.addTab(self.tensor_tab, "Quantum Tensor")#!/usr/bin/env python3
+"""
+quantum_kaleidoscope_visualizer.py - 3D Visualization for Quantum Kaleidoscope system
+
+This module provides a 3D visualization of the node network, system state,
+and quantum tensor interactions. It uses PyQt5 and PyOpenGL for rendering.
+"""
+
+import os
+import sys
+import time
+import json
+import math
+import random
+import numpy as np
+import traceback
+from typing import Dict, List, Any, Optional, Tuple
+from datetime import datetime
+import threading
+
+# Setup virtual environment (will be skipped if already activated)
+def setup_virtual_environment():
+    """Set up and activate virtual environment if not already activated"""
+    try:
+        # Check if we're already in a virtual environment
+        if sys.prefix == sys.base_prefix:
+            venv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qk_venv")
+            
+            # Create virtual environment if it doesn't exist
+            if not os.path.exists(venv_path):
+                import subprocess
+                print(f"Creating virtual environment at {venv_path}...")
+                subprocess.check_call([sys.executable, "-m", "venv", venv_path])
+            
+            # Construct the activation script path based on the OS
+            if sys.platform == "win32":
+                activate_script = os.path.join(venv_path, "Scripts", "activate.bat")
+                cmd = f"call {activate_script} && python {__file__}"
+            else:  # Unix-like systems (Linux, macOS)
+                activate_script = os.path.join(venv_path, "bin", "activate")
+                cmd = f"source {activate_script} && python {__file__}"
+            
+            # Execute the activation and rerun this script
+            print(f"Activating virtual environment and restarting script...")
+            os.system(cmd)
+            sys.exit(0)
+        else:
+            # Already in virtual environment, ensure all dependencies are installed
+            import importlib
+            
+            required_packages = [
+                "numpy", "PyQt5", "PyOpenGL", "PyOpenGL_accelerate", "pywavefront", 
+                "pillow", "matplotlib", "networkx"
+            ]
+            
+            missing_packages = []
+            for package in required_packages:
+                try:
+                    importlib.import_module(package)
+                except ImportError:
+                    missing_packages.append(package)
+            
+            if missing_packages:
+                import subprocess
+                print(f"Installing missing packages: {', '.join(missing_packages)}")
+                subprocess.check_call([sys.executable, "-m", "pip", "install"] + missing_packages)
+                
+                # Restart script to ensure all imports work
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    except Exception as e:
+        print(f"Error setting up virtual environment: {str(e)}")
+        traceback.print_exc()
+        sys.exit(1)
+
+# Run setup before proceeding
+setup_virtual_environment()
+
+# Now we can safely import external dependencies
+from PyQt5.QtCore import Qt, QTimer, QSize, pyqtSignal, QThread
+from PyQt5.QtGui import QColor, QFont, QPainter, QSurfaceFormat
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+    QLabel, QPushButton, QSlider, QTabWidget, QTreeWidget, QTreeWidgetItem,
+    QSplitter, QComboBox, QLineEdit, QDockWidget, QStatusBar, QAction, QMenu,
+    QOpenGLWidget, QMessageBox, QProgressBar, QListWidget, QListWidgetItem
+)
+from OpenGL.GL import *
+from OpenGL.GLU import *
+import networkx as nx
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+
+# Import the core system
+from quantum_kaleidoscope_core import (
+    AI_Core,
+    NodeType,
+    TaskPriority,
+    TextNode,
+    VisualNode,
+    BaseNode,
+    NodeState,
+    config_manager,
+    Tensor
+)
+
+# =====================================================================
+# Node Visualization Models
+# =====================================================================
+
+class NodeVisualModel:
+    """Visual representation of a node in 3D space"""
+    
+    # Static model data (shared by all nodes of same type)
+    model_data = {}
+    colors = {
+        NodeType.BASE: (0.5, 0.5, 0.5),      # Gray
+        NodeType.TEXT: (0.2, 0.6, 1.0),      # Blue
+        NodeType.VISUAL: (1.0, 0.4, 0.4),    # Red
+        NodeType.DATA: (0.4, 1.0, 0.4),      # Green
+        NodeType.CAPABILITY: (1.0, 0.8, 0.2), # Yellow
+        NodeType.SUPER: (0.8, 0.2, 0.8)      # Purple
+    }
+    
+    def __init__(self, node: BaseNode, position: Tuple[float, float, float] = None):
+        """Initialize node visual model"""
+        self.node = node
+        self.position = position or (
+            random.uniform(-5, 5),
+            random.uniform(-5, 5),
+            random.uniform(-5, 5)
+        )
+        self.velocity = (0, 0, 0)
+        self.rotation = (0, 0, 0)
+        self.scale = 1.0
+        self.color = self.colors.get(node.type, (0.5, 0.5, 0.5))
+        self.highlighted = False
+        
+        # Update scale based on energy
+        self.update_scale()
+        
+    def update_scale(self):
+        """Update scale based on node energy"""
+        self.scale = 0.5 + (self.node.energy / 100.0)
+        
+    def draw(self):
+        """Draw node in 3D space"""
+        # Save current matrix
+        glPushMatrix()
+        
+        # Apply transformations
+        glTranslatef(*self.position)
+        glRotatef(self.rotation[0], 1, 0, 0)
+        glRotatef(self.rotation[1], 0, 1, 0)
+        glRotatef(self.rotation[2], 0, 0, 1)
+        glScalef(self.scale, self.scale, self.scale)
+        
+        # Set color based on node state
+        if self.highlighted:
+            # Highlighted node
+            glColor4f(1.0, 1.0, 1.0, 1.0)
+        elif self.node.state == NodeState.RESONATING:
+            # Resonating nodes glow
+            intensity = 0.7 + 0.3 * math.sin(time.time() * 5)
+            glColor4f(self.color[0] * intensity, self.color[1] * intensity, 
+                    self.color[2] * intensity, 1.0)
+        elif self.node.state == NodeState.UNSTABLE:
+            # Unstable nodes flicker
+            intensity = 0.5 + 0.5 * random.random()
+            glColor4f(self.color[0] * intensity, self.color[1] * intensity, 
+                    self.color[2] * intensity, 1.0)
+        elif self.node.state == NodeState.DORMANT:
+            # Dormant nodes are dim
+            glColor4f(self.color[0] * 0.4, self.color[1] * 0.4, 
+                    self.color[2] * 0.4, 0.7)
+        else:
+            # Normal nodes
+            stability_factor = self.node.stability  # 0.0 to 1.0
+            alpha = 0.7 + (0.3 * stability_factor)
+            glColor4f(self.color[0], self.color[1], self.color[2], alpha)
+        
+        # Draw node model based on type
+        self._draw_model()
+        
+        # Restore matrix
+        glPopMatrix()
+        
+    def _draw_model(self):
+        """Draw the appropriate 3D model for this node type"""
+        # Get node type
+        node_type = self.node.type
+        
+        # If we haven't generated model data for this type yet, do so
+        if node_type not in self.model_data:
+            self._generate_model_data(node_type)
+            
+        # Get model data
+        model = self.model_data[node_type]
+        
+        # Draw model
+        glBegin(GL_TRIANGLES)
+        for triangle in model:
+            for vertex in triangle:
+                glVertex3f(*vertex)
+        glEnd()
+        
+    def _generate_model_data(self, node_type: NodeType):
+        """Generate model data for a node type"""
+        if node_type == NodeType.BASE:
+            # Simple cube
+            self.model_data[node_type] = self._generate_cube()
+        elif node_type == NodeType.TEXT:
+            # Text node is a flattened cube
+            self.model_data[node_type] = self._generate_prism(8, 0.3)
+        elif node_type == NodeType.VISUAL:
+            # Visual node is a sphere
+            self.model_data[node_type] = self._generate_sphere(1.0, 16, 8)
+        elif node_type == NodeType.DATA:
+            # Data node is an octahedron
+            self.model_data[node_type] = self._generate_octahedron()
+        elif node_type == NodeType.CAPABILITY:
+            # Capability node is a cylinder
+            self.model_data[node_type] = self._generate_cylinder(1.0, 0.8, 12)
+        elif node_type == NodeType.SUPER:
+            # Super node is a dodecahedron
+            self.model_data[node_type] = self._generate_dodecahedron()
+        else:
+            # Default to cube
+            self.model_data[node_type] = self._generate_cube()
+            
+    def _generate_cube(self) -> List[List[Tuple[float, float, float]]]:
+        """Generate model data for a cube"""
+        vertices = [
+            (-0.5, -0.5, -0.5),  # 0
+            (0.5, -0.5, -0.5),   # 1
+            (0.5, 0.5, -0.5),    # 2
+            (-0.5, 0.5, -0.5),   # 3
+            (-0.5, -0.5, 0.5),   # 4
+            (0.5, -0.5, 0.5),    # 5
+            (0.5, 0.5, 0.5),     # 6
+            (-0.5, 0.5, 0.5)     # 7
+        ]
+        
+        faces = [
+            [0, 1, 2], [0, 2, 3],  # Front
+            [4, 6, 5], [4, 7, 6],  # Back
+            [0, 3, 7], [0, 7, 4],  # Left
+            [1, 5, 6], [1, 6, 2],  # Right
+            [3, 2, 6], [3, 6, 7],  # Top
+            [0, 4, 5], [0, 5, 1]   # Bottom
+        ]
+        
+        triangles = []
+        for face in faces:
+            triangle = [vertices[face[0]], vertices[face[1]], vertices[face[2]]]
+            triangles.append(triangle)
+            
+        return triangles
+        
+    def _generate_sphere(self, radius: float, slices: int, stacks: int) -> List[List[Tuple[float, float, float]]]:
+        """Generate model data for a sphere"""
+        vertices = []
+        triangles = []
+        
+        # Generate vertices
+        for i in range(stacks + 1):
+            phi = math.pi * i / stacks
+            for j in range(slices):
+                theta = 2 * math.pi * j / slices
+                
+                x = radius * math.sin(phi) * math.cos(theta)
+                y = radius * math.sin(phi) * math.sin(theta)
+                z = radius * math.cos(phi)
+                
+                vertices.append((x, y, z))
+                
+        # Generate triangles
+        for i in range(stacks):
+            for j in range(slices):
+                next_j = (j + 1) % slices
+                
+                current = i * slices + j
+                next_j_current = i * slices + next_j
+                next_i = (i + 1) * slices + j
+                next_i_next_j = (i + 1) * slices + next_j
+                
+                if i > 0:
+                    triangles.append([
+                        vertices[current],
+                        vertices[next_j_current],
+                        vertices[next_i_next_j]
+                    ])
+                    
+                if i < stacks - 1:
+                    triangles.append([
+                        vertices[current],
+                        vertices[next_i_next_j],
+                        vertices[next_i]
+                    ])
+                    
+        return triangles
+        
+    def _generate_octahedron(self) -> List[List[Tuple[float, float, float]]]:
+        """Generate model data for an octahedron"""
+        vertices = [
+            (0, 0, 1),     # Top
+            (1, 0, 0),     # Right
+            (0, 1, 0),     # Front
+            (-1, 0, 0),    # Left
+            (0, -1, 0),    # Back
+            (0, 0, -1)     # Bottom
+        ]
+        
+        faces = [
+            [0, 2, 1],     # Top-Front-Right
+            [0, 1, 4],     # Top-Right-Back
+            [0, 4, 3],     # Top-Back-Left
+            [0, 3, 2],     # Top-Left-Front
+            [5, 1, 2],     # Bottom-Right-Front
+            [5, 4, 1],     # Bottom-Back-Right
+            [5, 3, 4],     # Bottom-Left-Back
+            [5, 2, 3]      # Bottom-Front-Left
+        ]
+        
+        triangles = []
+        for face in faces:
+            triangle = [vertices[face[0]], vertices[face[1]], vertices[face[2]]]
+            triangles.append(triangle)
+            
+        return triangles
+        
+    def _generate_cylinder(self, radius: float, height: float, segments: int) -> List[List[Tuple[float, float, float]]]:
+        """Generate model data for a cylinder"""
+        triangles = []
+        
+        # Top and bottom center points
+        top_center = (0, 0, height / 2)
+        bottom_center = (0, 0, -height / 2)
+        
+        # Generate vertices around the circular edge
+        top_vertices = []
+        bottom_vertices = []
+        
+        for i in range(segments):
+            angle = 2 * math.pi * i / segments
+            x = radius * math.cos(angle)
+            y = radius * math.sin(angle)
+            
+            top_vertices.append((x, y, height / 2))
+            bottom_vertices.append((x, y, -height / 2))
+            
+        # Generate triangles for top and bottom faces
+        for i in range(segments):
+            next_i = (i + 1) % segments
+            
+            # Top face
+            triangles.append([
+                top_center,
+                top_vertices[i],
+                top_vertices[next_i]
+            ])
+            
+            # Bottom face
+            triangles.append([
+                bottom_center,
+                bottom_vertices[next_i],
+                bottom_vertices[i]
+            ])
+            
+            # Side face (two triangles)
+            triangles.append([
+                top_vertices[i],
+                bottom_vertices[i],
+                bottom_vertices[next_i]
+            ])
+            
+            triangles.append([
+                top_vertices[i],
+                bottom_vertices[next_i],
+                top_vertices[next_i]
+            ])
+            
+        return triangles
+        
+    def _generate_dodecahedron(self) -> List[List[Tuple[float, float, float]]]:
+        """Generate model data for a dodecahedron"""
+        # Dodecahedron is complex, use a simplified approximation
+        phi = (1 + math.sqrt(5)) / 2  # Golden ratio
+        vertices = [
+            (1, 1, 1),
+            (1, 1, -1),
+            (1, -1, 1),
+            (1, -1, -1),
+            (-1, 1, 1),
+            (-1, 1, -1),
+            (-1, -1, 1),
+            (-1, -1, -1),
+            (0, phi, 1/phi),
+            (0, phi, -1/phi),
+            (0, -phi, 1/phi),
+            (0, -phi, -1/phi),
+            (1/phi, 0, phi),
+            (1/phi, 0, -phi),
+            (-1/phi, 0, phi),
+            (-1/phi, 0, -phi),
+            (phi, 1/phi, 0),
+            (phi, -1/phi, 0),
+            (-phi, 1/phi, 0),
+            (-phi, -1/phi, 0)
+        ]
+        
+        # Normalize to unit size
+        max_coord = max(max(abs(v[0]), abs(v[1]), abs(v[2])) for v in vertices)
+        vertices = [(v[0]/max_coord, v[1]/max_coord, v[2]/max_coord) for v in vertices]
+        
+        # This is a simplified approximation, a real dodecahedron has 12 pentagonal faces
+        # Here we'll just use triangles that approximate its shape
+        faces = [
+            [0, 8, 9], [0, 9, 1], [0, 1, 16], [0, 16, 17], [0, 17, 2],
+            [0, 2, 12], [0, 12, 14], [0, 14, 4], [0, 4, 8],
+            [7, 11, 10], [7, 10, 6], [7, 6, 19], [7, 19, 18], [7, 18, 5],
+            [7, 5, 15], [7, 15, 13], [7, 13, 3], [7, 3, 11]
+        ]
+        
+        triangles = []
+        for face in faces:
+            triangle = [vertices[face[0]], vertices[face[1]], vertices[face[2]]]
+            triangles.append(triangle)
+            
+        return triangles
+        
+    def _generate_prism(self, sides: int, height: float) -> List[List[Tuple[float, float, float]]]:
+        """Generate model data for a prism"""
+        triangles = []
+        
+        # Top and bottom polygons
+        top_vertices = []
+        bottom_vertices = []
+        
+        for i in range(sides):
+            angle = 2 * math.pi * i / sides
+            x = math.cos(angle)
+            y = math.sin(angle)
+            
+            top_vertices.append((x, y, height / 2))
+            bottom_vertices.append((x, y, -height / 2))
+            
+        # Triangulate the top and bottom polygons
+        # Use the fan method (connect all vertices to center)
+        top_center = (0, 0, height / 2)
+        bottom_center = (0, 0, -height / 2)
+        
+        for i in range(sides):
+            next_i = (i + 1) % sides
+            
+            # Top face
+            triangles.append([
+                top_center,
+                top_vertices[i],
+                top_vertices[next_i]
+            ])
+            
+            # Bottom face
+            triangles.append([
+                bottom_center,
+                bottom_vertices[next_i],
+                bottom_vertices[i]
+            ])
+            
+            # Side face (two triangles)
+            triangles.append([
+                top_vertices[i],
+                bottom_vertices[i],
+                bottom_vertices[next_i]
+            ])
+            
+            triangles.append([
+                top_vertices[i],
+                bottom_vertices[next_i],
+                top_vertices[next_i]
+            ])
+            
+        return triangles
+
+class ConnectionVisualModel:
+    """Visual representation of a connection between nodes"""
+    
+    def __init__(self, source_model: NodeVisualModel, target_model: NodeVisualModel, strength: float):
+        """Initialize connection visual model"""
+        self.source_model = source_model
+        self.target_model = target_model
+        self.strength = strength
+        self.color = (1.0, 1.0, 1.0)  # Default white
+        self.highlighted = False
+        
+    def draw(self):
+        """Draw connection in 3D space"""
+        # Get positions
+        source_pos = self.source_model.position
+        target_pos = self.target_model.position
+        
+        # Set color based on strength and highlight state
+        if self.highlighted:
+            glColor4f(1.0, 1.0, 0.0, 1.0)  # Highlighted: yellow
+            line_width = 3.0
+        else:
+            # Normal: white with alpha based on strength
+            alpha = 0.2 + (self.strength * 0.8)
+            glColor4f(self.color[0], self.color[1], self.color[2], alpha)
+            line_width = 1.0 + (self.strength * 2.0)
+            
+        # Set line width
+        glLineWidth(line_width)
+        
+        # Draw line
+        glBegin(GL_LINES)
+        glVertex3f(*source_pos)
+        glVertex3f(*target_pos)
+        glEnd()
+        
+        # Reset line width
+        glLineWidth(1.0)
+        
+# =====================================================================
+# OpenGL Widget for 3D Visualization
+# =====================================================================
+
+class NodeNetworkGLWidget(QOpenGLWidget):
+    """OpenGL widget for visualizing the node network"""
+    
+    node_clicked = pyqtSignal(str)  # Signal emitted when node is clicked
+    
+    def __init__(self, parent=None):
+        """Initialize the OpenGL widget"""
+        super().__init__(parent)
+        
+        # Set up OpenGL format for transparency
+        format = QSurfaceFormat()
+        format.setDepthBufferSize(24)
+        format.setSamples(4)  # Multisampling for antialiasing
+        self.setFormat(format)
+        
+        # Node and connection visual models
+        self.node_models = {}    # Dict of node_id -> NodeVisualModel
+        self.connection_models = {}  # Dict of (source_id, target_id) -> ConnectionVisualModel
+        
+        # Camera and view settings
+        self.camera_distance = 15.0
+        self.camera_azimuth = 45.0
+        self.camera_elevation = 30.0
+        self.camera_target = (0, 0, 0)
+        
+        # Interaction state
+        self.last_mouse_pos = None
+        self.selected_node_id = None
+        
+        # Physics simulation settings
+        self.simulating = True
+        self.repulsion = 10.0
+        self.attraction = 0.1
+        self.damping = 0.8
+        
+        # Animation timer
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.animate)
+        self.timer.start(16)  # ~60 FPS
+        
+    def initializeGL(self):
+        """Initialize OpenGL settings"""
+        # Set background color (dark blue-gray)
+        glClearColor(0.05, 0.05, 0.1, 1.0)
+        
+        # Enable depth testing
+        glEnable(GL_DEPTH_TEST)
+        glDepthFunc(GL_LESS)
+        
+        # Enable alpha blending
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        
+        # Enable antialiasing
+        glEnable(GL_LINE_SMOOTH)
+        glEnable(GL_POLYGON_SMOOTH)
+        glHint(GL_LINE_SMOOTH_HINT, GL_NICEST)
+        glHint(GL_POLYGON_SMOOTH_HINT, GL_NICEST)
+        
+        # Enable backface culling
+        glEnable(GL_CULL_FACE)
+        glCullFace(GL_BACK)
+        
+    def resizeGL(self, width, height):
+        """Handle widget resize events"""
+        # Update viewport
+        glViewport(0, 0, width, height)
+        
+        # Set up perspective projection
+        glMatrixMode(GL_PROJECTION)
+        glLoadIdentity()
+        aspect = width / height
+        gluPerspective(45, aspect, 0.1, 100.0)
+        
+        # Switch back to modelview matrix
+        glMatrixMode(GL_MODELVIEW)
+        
+    def paintGL(self):
+        """Paint the scene"""
+        # Clear buffers
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        
+        # Set up camera
+        glLoadIdentity()
+        
+        # Position camera
+        cam_x = self.camera_distance * math.cos(math.radians(self.camera_elevation)) * math.sin(math.radians(self.camera_azimuth))
+        cam_y = self.camera_distance * math.cos(math.radians(self.camera_elevation)) * math.cos(math.radians(self.camera_azimuth))
+        cam_z = self.camera_distance * math.sin(math.radians(self.camera_elevation))
+        
+        # Point camera at target
+        gluLookAt(
+            cam_x, cam_y, cam_z,  # Camera position
+            *self.camera_target,  # Look-at point
+            0, 0, 1               # Up vector
+        )
+        
+        # Draw grid
+        self._draw_grid()
+        
+        # Draw connections
+        for conn_model in self.connection_models.values():
+            conn_model.draw()
+            
+        # Draw nodes
+        for node_model in self.node_models.values():
+            node_model.draw()
+            
+    def _draw_grid(self):
+        """Draw a grid in the XY plane"""
+        glLineWidth(1.0)
+        glColor4f(0.2, 0.2, 0.3, 0.5)
+        
+        grid_size = 20
+        grid_step = 1
+        
+        glBegin(GL_LINES)
+        
+        # Draw X lines
+        for i in range(-grid_size, grid_size + 1, grid_step):
+            glVertex3f(i, -grid_size, 0)
+            glVertex3f(i, grid_size, 0)
+            
+        # Draw Y lines
+        for i in range(-grid_size, grid_size + 1, grid_step):
+            glVertex3f(-grid_size, i, 0)
+            glVertex3f(grid_size, i, 0)
+            
+        glEnd()
+        
+    def update_nodes(self, nodes: List[BaseNode], connections: Dict[str, Dict[str, float]]):
+        """Update nodes and connections from AI_Core"""
+        # Keep track of existing nodes
+        existing_nodes = set(self.node_models.keys())
+        
+        # Update or create node models
+        for node in nodes:
+            if node.id in self.node_models:
+                # Update existing node model
+                self.node_models[node.id].node = node
+                self.node_models[node.id].update_scale()
+            else:
+                # Create new node model
+                self.node_models[node.id] = NodeVisualModel(node)
+                
+            # Remove from existing set
+            if node.id in existing_nodes:
+                existing_nodes.remove(node.id)
+                
+        # Remove nodes that no longer exist
+        for node_id in existing_nodes:
+            if node_id in self.node_models:
+                del self.node_models[node_id]
+                
+        # Keep track of existing connections
+        existing_connections = set(self.connection_models.keys())
+        
+        # Update or create connection models
+        for source_id, targets in connections.items():
+            for target_id, strength in targets.items():
+                conn_key = (source_id, target_id)
+                
+                # Skip if either node doesn't exist
+                if source_id not in self.node_models or target_id not in self.node_models:
+                    continue
+                    
+                if conn_key in self.connection_models:
+                    # Update existing connection
+                    self.connection_models[conn_key].strength = strength
+                else:
+                    # Create new connection
+                    self.connection_models[conn_key] = ConnectionVisualModel(
+                        self.node_models[source_id],
+                        self.node_models[target_id],
+                        strength
+                    )
+                    
+                # Remove from existing set
+                if conn_key in existing_connections:
+                    existing_connections.remove(conn_key)
+                    
+        # Remove connections that no longer exist
+        for conn_key in existing_connections:
+            if conn_key in self.connection_models:
+                del self.connection_models[conn_key]
+                
+        # Update display
+        self.update()
+        
+    def animate(self):
+        """Animate the node network"""
+        if not self.simulating or not self.node_models:
+            return
+            
+        # Update node rotations
+        for node_model in self.node_models.values():
+            # Rotate based on node state
+            if node_model.node.state == NodeState.RESONATING:
+                # Resonating nodes rotate faster
+                node_model.rotation = (
+                    node_model.rotation[0] + 1.0,
+                    node_model.rotation[1] + 1.5,
+                    node_model.rotation[2] + 0.5
+                )
+            elif node_model.node.state == NodeState.ACTIVE:
+                # Active nodes rotate slowly
+                node_model.rotation = (
+                    node_model.rotation[0] + 0.2,
+                    node_model.rotation[1] + 0.3,
+                    node_model.rotation[2] + 0.1
+                )
+            elif node_model.node.state == NodeState.LEARNING:
+                # Learning nodes rotate on Y axis
+                node_model.rotation = (
+                    node_model.rotation[0],
+                    node_model.rotation[1] + 0.8,
+                    node_model.rotation[2]
+                )
+                
+        # Apply physics if simulating
+        self._update_physics()
+        
+        # Update display
+        self.update()
+        
+    def _update_physics(self):
+        """Update node positions based on physics simulation"""
+        # Calculate forces for each node
+        forces = {}
+        
+        # Repulsion forces between all nodes (inverse square law)
+        for node1_id, node1_model in self.node_models.items():
+            force = [0.0, 0.0, 0.0]
+            
+            # Calculate repulsion from other nodes
+            for node2_id, node2_model in self.node_models.items():
+                if node1_id == node2_id:
+                    continue
+                    
+                # Vector from node1 to node2
+                dx = node2_model.position[0] - node1_model.position#!/usr/bin/env python3
+"""
+quantum_kaleidoscope_visualizer.py - 3D Visualization for Quantum Kaleidoscope system
+
+This module provides a 3D visualization of the node network, system state,
+and quantum tensor interactions. It uses PyQt5 and PyOpenGL for rendering.
+"""
+
+import os
+import sys
+import time
+import json
+import math
+import random
+import numpy as np
+import traceback
+from typing import Dict, List, Any, Optional, Tuple
+from datetime import datetime
+import threading
+
+# Setup virtual environment (will be skipped if already activated)
+def setup_virtual_environment():
+    """Set up and activate virtual environment if not already activated"""
+    try:
+        # Check if we're already in a virtual environment
+        if sys.prefix == sys.base_prefix:
+            venv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qk_venv")
+            
+            # Create virtual environment if it doesn't exist
+            if not os.path.exists(venv_path):
+                import subprocess
+                print(f"Creating virtual environment at {venv_path}...")
+                subprocess.check_call([sys.executable, "-m", "venv", venv_path])
+            
+            # Construct the activation script path based on the OS
+            if sys.platform == "win32":
+                activate_script = os.path.join(venv_path, "Scripts", "activate.bat")
+                cmd = f"call {activate_script} && python {__file__}"
+            else:  # Unix-like systems (Linux, macOS)

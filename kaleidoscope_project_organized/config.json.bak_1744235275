@@ -1,0 +1,73 @@
+{{
+  "system": {
+    "dimension": 128,
+    "auto_discovery": true,
+    "max_active_nodes": 1000,
+    "mutation_interval": 10.0
+  },
+  "paths": {
+    "data_dir": "./data",
+    "log_dir": "./logs",
+    "persistence_dir": "./data",
+    "model_cache": "/home/jg/.cache/unravel-ai/models",
+    "reconstruction_dir": "./reconstructed",
+    "applications_dir": "./applications"
+  },
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8000
+  },
+  "visualizer": {
+    "port": 8081
+  },
+  "llm": {
+    "provider": "llamacpp_api",
+    "model_id": "TheBloke/Mistral-7B-Instruct-v0.2-GGUF",
+    "model_file": "mistral-7b-instruct-v0.2.Q4_K_M.gguf",
+    "model_path": "/home/jg/.cache/unravel-ai/models/TheBloke_Mistral-7B-Instruct-v0.2-GGUF/mistral-7b-instruct-v0.2.Q4_K_M.gguf",
+    "api_base": "http://localhost:8081",
+    "n_ctx": 2048,
+    "default_model": "codellama",
+    "available_models": [
+      "codellama",
+      "llama2",
+      "mistral",
+      "phi"
+    ],
+    "temperature": 0.2,
+    "max_tokens": 4096,
+    "context_window": 8192,
+    "gpu_enabled": false
+  },
+  "quantum_sync": {
+    "enable": true,
+    "server_url": "ws://localhost:8765"
+  },
+  "sandbox": {
+    "enable": true
+  },
+  "tools": {
+    "radare2_path": "/usr/local/bin/r2",
+    "ghidra_path": "/home/jg/Music/include/kaleidoscope_project_organized/ghidra/ghidra_11.3.1_PUBLIC_20250219/ghidra_11.3.1_PUBLIC/server/ghidraSvr",
+    "retdec_path": "retdec-decompiler",
+    "js_beautify_path": "js-beautify",
+    "llama_server_path": "/home/jg/.local/bin/llama-server",
+    "ollama_path": "ollama"
+  },
+  "max_workers": 4,
+  "logging": {
+    "level": "INFO",
+    "file": "logs/kaleidoscope.log",
+    "console": true
+  },
+  "processing": {
+    "chunk_size": 4096,
+    "max_file_size": 100000000
+  },
+  "web_interface": {
+    "host": "127.0.0.1",
+    "port": 5000,
+    "enable_upload": true,
+    "max_upload_size": 50000000
+  }
+}

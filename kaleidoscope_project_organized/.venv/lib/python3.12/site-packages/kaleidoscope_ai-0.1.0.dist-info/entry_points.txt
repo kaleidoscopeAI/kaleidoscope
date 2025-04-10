@@ -1,0 +1,6 @@
+[console_scripts]
+kaleidoscope = main:main
+kaleidoscope-launcher = scripts.launcher:main
+
+[gui_scripts]
+qsin-viz = visualization.qsin_visualizer:main

@@ -1,0 +1,11 @@
+2025-04-09 15:12:40,802 [ERROR] KaleidoscopeCLI: Error importing core modules: No module named 'flask_limiter'
+Traceback (most recent call last):
+  File "/home/jg/Music/include/kaleidoscope_project_organized/main.py", line 24, in <module>
+    from web.kaleidoscope_web import start_server
+  File "/home/jg/Music/include/kaleidoscope_project_organized/web/kaleidoscope_web.py", line 25, in <module>
+    from flask_limiter import Limiter
+ModuleNotFoundError: No module named 'flask_limiter'
+2025-04-09 15:12:40,802 [ERROR] KaleidoscopeCLI: Please ensure:
+2025-04-09 15:12:40,802 [ERROR] KaleidoscopeCLI:   1. You are in the 'kaleidoscope_project_organized' directory.
+2025-04-09 15:12:40,802 [ERROR] KaleidoscopeCLI:   2. Your virtual environment is activated.
+2025-04-09 15:12:40,803 [ERROR] KaleidoscopeCLI:   3. You have run 'pip install -e .' successfully.

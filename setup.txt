@@ -1,0 +1,677 @@
+#!/bin/bash
+# ==============================================================================
+# Enhanced Kaleidoscope AI Project Setup Script
+#
+# A comprehensive setup script that configures the entire Kaleidoscope AI
+# environment with intelligent auto-detection, dependency resolution,
+# port conflict management, and component validation.
+# ==============================================================================
+
+# --- Core Configuration ---
+PROJECT_DIR_NAME="kaleidoscope_project_organized"
+VENV_DIR=".venv"
+PYTHON_CMD=$(command -v python3 || command -v python)
+MIN_PYTHON_VERSION="3.10"
+CONFIG_FILE_NAME="config.json"
+REQUIREMENTS_FILE="requirements.txt"
+LOG_FILE="setup_log.txt"
+FORCE_MODE=false
+SETUP_ID=$(date +%s)
+BACKUP_DIR="setup_backups"
+
+# --- Default Tool Paths (will try to auto-detect) ---
+LLAMA_CPP_BUILD_DIR="$HOME/.cache/unravel-ai/build/llama.cpp/build/bin"
+LOCAL_BIN_DIR="$HOME/.local/bin"
+RADARE2_CMD=$(command -v r2 || echo "r2")
+GHIDRA_PATH=""  # Will auto-detect
+RETDEC_CMD=$(command -v retdec-decompiler || echo "retdec-decompiler")
+JSBEAUTIFY_CMD=$(command -v js-beautify || echo "js-beautify")
+OLLAMA_CMD=$(command -v ollama || echo "ollama")
+LLAMA_SERVER_CMD="llama-server"
+
+# --- Default Configuration Values ---
+LLM_MODEL_PATH="$HOME/.cache/unravel-ai/models/TheBloke_Mistral-7B-Instruct-v0.2-GGUF/mistral-7b-instruct-v0.2.Q4_K_M.gguf"
+LLM_API_BASE="http://localhost:8081"
+LLM_PROVIDER="llamacpp_api"
+OLLAMA_DEFAULT_MODEL="codellama"
+QUANTUM_SYNC_URL="ws://localhost:8765"
+WEB_PORT=5000
+API_PORT=8000
+VIS_PORT=8081
+GPU_SUPPORT=false
+
+# --- Command Line Arguments ---
+VERBOSE=false
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --force) FORCE_MODE=true; shift ;;
+        --verbose|-v) VERBOSE=true; shift ;;
+        --help|-h) 
+            echo "Usage: $0 [--force] [--verbose|-v] [--help|-h]"
+            echo "  --force: Proceed despite missing dependencies"
+            echo "  --verbose|-v: Enable detailed debug logging"
+            echo "  --help|-h: Show this help message"
+            exit 0
+            ;;
+        *) log_error "Unknown option: $1"; exit 1 ;;
+    esac
+done
+
+# --- Helper Functions ---
+log() {
+    local level="$1"
+    local message="$2"
+    local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
+    local formatted_message="[$timestamp] [$level] $message"
+    
+    case "$level" in
+        "INFO")  echo -e "\033[0;32m$formatted_message\033[0m" ;;
+        "WARN")  echo -e "\033[0;33m$formatted_message\033[0m" >&2 ;;
+        "ERROR") echo -e "\033[0;31m$formatted_message\033[0m" >&2 ;;
+        "DEBUG") 
+            if [[ "$VERBOSE" == "true" ]]; then
+                echo -e "\033[0;36m$formatted_message\033[0m"
+            fi
+            ;;
+        *) echo "$formatted_message" ;;
+    esac
+    
+    echo "$formatted_message" >> "$LOG_FILE"
+}
+
+log_info() { log "INFO" "$1"; }
+log_warning() { log "WARN" "$1"; }
+log_error() { log "ERROR" "$1"; }
+log_debug() { log "DEBUG" "$1"; }
+
+error_exit() {
+    log_error "$1"
+    log_error "Setup failed. Review '$LOG_FILE' for detailed information."
+    
+    case "$2" in
+        "python_version")
+            log_info "Suggestion: Install Python $MIN_PYTHON_VERSION+ using your system package manager"
+            log_info "  Ubuntu/Debian: sudo apt install python3.10"
+            log_info "  Fedora/RHEL: sudo dnf install python3.10"
+            log_info "  macOS: brew install python@3.10"
+            ;;
+        "pip")
+            log_info "Suggestion: Install pip for Python"
+            log_info "  Ubuntu/Debian: sudo apt install python3-pip"
+            log_info "  Fedora/RHEL: sudo dnf install python3-pip"
+            log_info "  macOS: python3 -m ensurepip --upgrade"
+            ;;
+        "venv")
+            log_info "Suggestion: Install venv module"
+            log_info "  Ubuntu/Debian: sudo apt install python3-venv"
+            log_info "  Fedora/RHEL: sudo dnf install python3-venv"
+            ;;
+        "dependencies")
+            log_info "Suggestion: Check '$REQUIREMENTS_FILE' for errors"
+            log_info "  Try: pip install --upgrade pip setuptools wheel"
+            ;;
+        "port_conflict")
+            log_info "Suggestion: Manually configure ports in '$CONFIG_FILE_NAME'"
+            ;;
+        *)
+            log_info "Try running with --force flag for aggressive setup"
+            ;;
+    esac
+    
+    exit 1
+}
+
+success_exit() {
+    log_info "Installation completed successfully!"
+    log_info "===================================================================="
+    log_info "Setup summary:"
+    log_info "- Project directory: $PROJECT_FULL_PATH"
+    log_info "- Python virtual env: $(realpath "$VENV_DIR" 2>/dev/null || echo "$VENV_DIR")"
+    log_info "- Configuration: $CONFIG_FILE"
+    log_info "- Log file: $(realpath "$LOG_FILE")"
+    log_info "- Web interface port: $WEB_PORT"
+    log_info "- API server port: $API_PORT"
+    log_info "- Visualizer port: $VIS_PORT"
+    if [ "$LLM_PROVIDER" == "llamacpp_api" ]; then
+        log_info "- LLM API port: $LLM_PORT"
+    fi
+    log_info "- Quantum server port: $QUANTUM_PORT"
+    log_info "===================================================================="
+    log_info "To run the project:"
+    log_info "1. Activate the virtual environment: source $VENV_DIR/bin/activate"
+    log_info "2. Start the main application: python main.py"
+    log_info "3. Access the web interface at: http://localhost:$WEB_PORT"
+    log_info "===================================================================="
+    log_info "Setup log saved to: $LOG_FILE"
+    
+    create_startup_script
+    exit 0
+}
+
+command_exists() {
+    command -v "$1" &> /dev/null
+}
+
+auto_detect_tools() {
+    log_info "Auto-detecting installed tools..."
+    
+    if [ -z "$GHIDRA_PATH" ]; then
+        for path in \
+            "/opt/ghidra" \
+            "/usr/local/ghidra" \
+            "$HOME/ghidra" \
+            "$HOME/tools/ghidra" \
+            "$(pwd)/ghidra"; do
+            if [ -d "$path" ]; then
+                server_script=$(find "$path" -name "ghidraSvr" -type f -executable 2>/dev/null | head -n 1)
+                if [ -n "$server_script" ]; then
+                    GHIDRA_PATH="$server_script"
+                    log_info "Found Ghidra server at: $GHIDRA_PATH"
+                    break
+                fi
+            fi
+        done
+    fi
+    
+    LLAMA_SERVER_FOUND_PATH=""
+    if command_exists "$LLAMA_SERVER_CMD"; then
+        LLAMA_SERVER_FOUND_PATH=$(command -v "$LLAMA_SERVER_CMD")
+    elif [ -x "$LOCAL_BIN_DIR/$LLAMA_SERVER_CMD" ]; then
+        LLAMA_SERVER_FOUND_PATH="$LOCAL_BIN_DIR/$LLAMA_SERVER_CMD"
+    elif [ -x "$LLAMA_CPP_BUILD_DIR/$LLAMA_SERVER_CMD" ]; then
+        LLAMA_SERVER_FOUND_PATH="$LLAMA_CPP_BUILD_DIR/$LLAMA_SERVER_CMD"
+    fi
+    if [ -n "$LLAMA_SERVER_FOUND_PATH" ]; then
+        LLAMA_SERVER_CMD="$LLAMA_SERVER_FOUND_PATH"
+        log_info "Found Llama.cpp server at: $LLAMA_SERVER_CMD"
+    fi
+    
+    if command_exists nvidia-smi && nvidia-smi -L 2>/dev/null | grep -q "GPU"; then
+        GPU_SUPPORT=true
+        log_info "NVIDIA GPU detected, enabling GPU support"
+    elif command_exists rocm-smi && rocm-smi --showdevice 2>/dev/null | grep -q "GPU"; then
+        GPU_SUPPORT=true
+        log_info "AMD GPU detected, enabling GPU support"
+    fi
+    
+    if [ ! -f "$LLM_MODEL_PATH" ]; then
+        log_warning "Default LLM model not found at: $LLM_MODEL_PATH"
+        for dir in \
+            "$HOME/.cache/huggingface/hub" \
+            "$HOME/.cache/models" \
+            "$HOME/.local/share/ollama/models" \
+            "./models"; do
+            if [ -d "$dir" ]; then
+                found_model=$(find "$dir" -name "*.gguf" -type f 2>/dev/null | head -n 1)
+                if [ -n "$found_model" ]; then
+                    LLM_MODEL_PATH="$found_model"
+                    log_info "Found alternative LLM model at: $LLM_MODEL_PATH"
+                    break
+                fi
+            fi
+        done
+    fi
+}
+
+check_python_version() {
+    if ! command_exists "$PYTHON_CMD"; then
+        error_exit "$PYTHON_CMD is required but not found. Please install Python $MIN_PYTHON_VERSION+." "python_version"
+    fi
+
+    CURRENT_VERSION=$($PYTHON_CMD -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+    REQUIRED_MAJOR=$(echo $MIN_PYTHON_VERSION | cut -d. -f1)
+    REQUIRED_MINOR=$(echo $MIN_PYTHON_VERSION | cut -d. -f2)
+    CURRENT_MAJOR=$(echo $CURRENT_VERSION | cut -d. -f1)
+    CURRENT_MINOR=$(echo $CURRENT_VERSION | cut -d. -f2)
+
+    if [ "$CURRENT_MAJOR" -lt "$REQUIRED_MAJOR" ] || { [ "$CURRENT_MAJOR" -eq "$REQUIRED_MAJOR" ] && [ "$CURRENT_MINOR" -lt "$REQUIRED_MINOR" ]; }; then
+        error_exit "Python version $MIN_PYTHON_VERSION or higher required, but found $CURRENT_VERSION." "python_version"
+    fi
+    log_info "Python version $CURRENT_VERSION found."
+}
+
+is_port_free() {
+    PORT_NUM=$1
+    if command_exists ss; then
+        ss -tuln | grep -q ":$PORT_NUM " && return 1
+    elif command_exists netstat; then
+        netstat -tuln | grep -q ":$PORT_NUM " && return 1
+    elif command_exists lsof; then
+        lsof -i ":$PORT_NUM" &> /dev/null && return 1
+    else
+        log_warning "Cannot check port $PORT_NUM - 'ss', 'netstat', or 'lsof' not found. Assuming free."
+        return 0
+    fi
+    return 0
+}
+
+is_process_running_on_port() {
+    PORT_NUM=$1
+    if command_exists lsof; then
+        PROCESS_INFO=$(lsof -i ":$PORT_NUM" -sTCP:LISTEN -n -P 2>/dev/null)
+        if [ -n "$PROCESS_INFO" ]; then
+            PROCESS_NAME=$(echo "$PROCESS_INFO" | tail -n 1 | awk '{print $1}')
+            PROCESS_PID=$(echo "$PROCESS_INFO" | tail -n 1 | awk '{print $2}')
+            echo "$PROCESS_NAME (PID $PROCESS_PID)"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+find_free_port() {
+    START_PORT=$1
+    DESCRIPTION=$2
+    PORT=$START_PORT
+    while ! is_port_free "$PORT"; do
+        PROCESS_INFO=$(is_process_running_on_port "$PORT")
+        if [ $? -eq 0 ]; then
+            log_warning "Port $PORT ($DESCRIPTION) is in use by $PROCESS_INFO."
+            if [ "$FORCE_MODE" = true ]; then
+                log_info "Force mode enabled. Attempting to kill process $PROCESS_INFO..."
+                PID=$(echo "$PROCESS_INFO" | grep -o 'PID [0-9]*' | awk '{print $2}')
+                kill -9 "$PID" 2>/dev/null && log_info "Killed process on port $PORT" || log_warning "Failed to kill process. Finding next port..."
+            fi
+        fi
+        if ! is_port_free "$PORT"; then
+            PORT=$((PORT + 1))
+            if [ "$PORT" -gt 65535 ]; then
+                error_exit "No free ports available up to 65535 for $DESCRIPTION." "port_conflict"
+            fi
+        fi
+    done
+    if [ "$PORT" != "$START_PORT" ]; then
+        log_info "Resolved conflict: Using free port $PORT instead of $START_PORT for $DESCRIPTION."
+    else
+        log_info "Port $PORT ($DESCRIPTION) is free."
+    fi
+    echo "$PORT"
+}
+
+create_backup() {
+    local file="$1"
+    if [ -f "$file" ]; then
+        local backup_path="$BACKUP_DIR/$(basename "$file").bak-$SETUP_ID"
+        mkdir -p "$BACKUP_DIR"
+        cp "$file" "$backup_path"
+        log_debug "Created backup of $file at $backup_path"
+    fi
+}
+
+update_config_port() {
+    CONFIG_FILE="$1"
+    SECTION="$2"
+    KEY="$3"
+    NEW_PORT="$4"
+    
+    create_backup "$CONFIG_FILE"
+    
+    if command_exists jq; then
+        local tmp_file=$(mktemp)
+        jq ".$SECTION.$KEY = $NEW_PORT" "$CONFIG_FILE" > "$tmp_file"
+        if [ $? -eq 0 ] && [ -s "$tmp_file" ]; then
+            mv "$tmp_file" "$CONFIG_FILE"
+            log_info "Updated $CONFIG_FILE: Set $SECTION.$KEY to $NEW_PORT (using jq)"
+        else
+            rm -f "$tmp_file"
+            $PYTHON_CMD -c "import json; f = open('$CONFIG_FILE', 'r'); data = json.load(f); f.close(); data['$SECTION']['$KEY'] = $NEW_PORT; f = open('$CONFIG_FILE', 'w'); json.dump(data, f, indent=2); f.write('\n'); f.close()" || error_exit "Failed to update $CONFIG_FILE with $SECTION.$KEY=$NEW_PORT" "config_update"
+            log_info "Updated $CONFIG_FILE: Set $SECTION.$KEY to $NEW_PORT (using Python)"
+        fi
+    else
+        $PYTHON_CMD -c "import json; f = open('$CONFIG_FILE', 'r'); data = json.load(f); f.close(); data['$SECTION']['$KEY'] = $NEW_PORT; f = open('$CONFIG_FILE', 'w'); json.dump(data, f, indent=2); f.write('\n'); f.close()" || error_exit "Failed to update $CONFIG_FILE with $SECTION.$KEY=$NEW_PORT" "config_update"
+        log_info "Updated $CONFIG_FILE: Set $SECTION.$KEY to $NEW_PORT (using Python)"
+    fi
+}
+
+check_system_dependencies() {
+    log_info "Checking system dependencies..."
+    
+    MISSING_ESSENTIALS=()
+    if ! command_exists gcc && ! command_exists clang; then
+        MISSING_ESSENTIALS+=("C compiler (gcc or clang)")
+    fi
+    if ! command_exists make; then
+        MISSING_ESSENTIALS+=("make")
+    fi
+    if ! command_exists cmake; then
+        MISSING_ESSENTIALS+=("cmake")
+    fi
+    if ! command_exists git; then
+        MISSING_ESSENTIALS+=("git")
+    fi
+    
+    if [ ${#MISSING_ESSENTIALS[@]} -gt 0 ]; then
+        log_error "Missing essential build dependencies:"
+        for dep in "${MISSING_ESSENTIALS[@]}"; do
+            log_error "- $dep"
+        done
+        if [ "$FORCE_MODE" = false ]; then
+            error_exit "Please install missing dependencies."
+        else
+            log_warning "Continuing despite missing dependencies (--force mode)."
+        fi
+    else
+        log_info "All essential build dependencies are installed."
+    fi
+}
+
+check_python_packages() {
+    log_info "Checking for essential Python packages..."
+    
+    ESSENTIAL_PKGS=("pip" "setuptools" "wheel" "venv")
+    MISSING_PKGS=()
+    
+    for pkg in "${ESSENTIAL_PKGS[@]}"; do
+        if ! $PYTHON_CMD -c "import $pkg" 2>/dev/null; then
+            MISSING_PKGS+=("$pkg")
+        fi
+    done
+    
+    if [ ${#MISSING_PKGS[@]} -gt 0 ]; then
+        log_warning "Missing essential Python packages: ${MISSING_PKGS[*]}"
+        if [ "$FORCE_MODE" = true ]; then
+            log_info "Attempting to install missing Python packages..."
+            if [[ " ${MISSING_PKGS[*]} " =~ " pip " ]]; then
+                $PYTHON_CMD -m ensurepip --upgrade || error_exit "Failed to bootstrap pip." "pip"
+            fi
+            for pkg in "${MISSING_PKGS[@]}"; do
+                if [ "$pkg" != "pip" ]; then
+                    $PYTHON_CMD -m pip install --user "$pkg" || log_warning "Failed to install $pkg"
+                fi
+            done
+        else
+            error_exit "Please install missing Python packages: ${MISSING_PKGS[*]}" "pip"
+        fi
+    else
+        log_info "All essential Python packages are installed."
+    fi
+}
+
+create_startup_script() {
+    local startup_script="$PROJECT_FULL_PATH/start_kaleidoscope.sh"
+    
+    cat > "$startup_script" << EOF
+#!/bin/bash
+# Kaleidoscope AI Startup Script
+# Generated on $(date)
+
+PROJECT_DIR="$PROJECT_FULL_PATH"
+VENV_DIR="$VENV_DIR"
+CONFIG_FILE="$CONFIG_FILE"
+LLM_PROVIDER="$LLM_PROVIDER"
+LLM_MODEL_PATH="$LLM_MODEL_PATH"
+LLM_PORT="$LLM_PORT"
+WEB_PORT="$WEB_PORT"
+API_PORT="$API_PORT"
+VIS_PORT="$VIS_PORT"
+QUANTUM_PORT="$QUANTUM_PORT"
+LLAMA_SERVER_CMD="$LLAMA_SERVER_CMD"
+
+SESSION_NAME="kaleidoscope_\$(date +%s)"
+
+start_services() {
+    cd "\$PROJECT_DIR" || { echo "Error: Cannot change to project directory"; exit 1; }
+    source "\$VENV_DIR/bin/activate" || { echo "Error: Cannot activate virtual environment"; exit 1; }
+    
+    if command -v tmux &> /dev/null; then
+        echo "Starting services in new tmux session..."
+        tmux new-session -d -s "\$SESSION_NAME" -n "kaleidoscope"
+        
+        if [ "\$LLM_PROVIDER" == "llamacpp_api" ]; then
+            tmux split-window -h -t "\$SESSION_NAME" "\$LLAMA_SERVER_CMD -m '\$LLM_MODEL_PATH' -c 2048 --host 127.0.0.1 --port \$LLM_PORT; read -p 'Press Enter to close'"
+            sleep 2
+        fi
+        
+        tmux split-window -v -t "\$SESSION_NAME" "cd '\$PROJECT_DIR' && source '\$VENV_DIR/bin/activate' && python quantum/quantum_server.py --port \$QUANTUM_PORT; read -p 'Press Enter to close'"
+        sleep 2
+        
+        tmux select-pane -t "\$SESSION_NAME:0.0"
+        tmux send-keys -t "\$SESSION_NAME:0.0" "cd '\$PROJECT_DIR' && source '\$VENV_DIR/bin/activate' && python main.py --port \$WEB_PORT --api-port \$API_PORT --vis-port \$VIS_PORT" C-m
+        
+        tmux attach-session -t "\$SESSION_NAME"
+    else
+        echo "tmux not available. Starting services manually..."
+        if [ "\$LLM_PROVIDER" == "llamacpp_api" ]; then
+            echo "Start Llama.cpp server in a new terminal:"
+            echo "\$LLAMA_SERVER_CMD -m '\$LLM_MODEL_PATH' -c 2048 --host 127.0.0.1 --port \$LLM_PORT"
+        fi
+        echo "Start Quantum server in a new terminal:"
+        echo "cd '\$PROJECT_DIR' && source '\$VENV_DIR/bin/activate' && python quantum/quantum_server.py --port \$QUANTUM_PORT"
+        python main.py --port "\$WEB_PORT" --api-port "\$API_PORT" --vis-port "\$VIS_PORT"
+    fi
+}
+
+if [ "\$1" == "--help" ] || [ "\$1" == "-h" ]; then
+    echo "Kaleidoscope AI Startup Script"
+    echo "Usage: \$0 [OPTIONS]"
+    echo "Options:"
+    echo "  --help, -h      Show this help message"
+    echo "  --restart       Kill and restart all services"
+    echo "  --stop          Stop all services"
+    exit 0
+fi
+
+if [ "\$1" == "--restart" ]; then
+    pkill -f "python.*quantum/quantum_server.py" || true
+    pkill -f "\$LLAMA_SERVER_CMD" || true
+    pkill -f "python.*main.py" || true
+    if command -v tmux &> /dev/null && tmux has-session -t "\$SESSION_NAME" 2>/dev/null; then
+        tmux kill-session -t "\$SESSION_NAME"
+    fi
+    sleep 2
+    start_services
+    exit 0
+fi
+
+if [ "\$1" == "--stop" ]; then
+    pkill -f "python.*quantum/quantum_server.py" || true
+    pkill -f "\$LLAMA_SERVER_CMD" || true
+    pkill -f "python.*main.py" || true
+    if command -v tmux &> /dev/null && tmux has-session -t "\$SESSION_NAME" 2>/dev/null; then
+        tmux kill-session -t "\$SESSION_NAME"
+    fi
+    echo "All processes stopped."
+    exit 0
+fi
+
+start_services
+EOF
+
+    chmod +x "$startup_script"
+    log_info "Created startup script: $startup_script"
+}
+
+check_llm_model() {
+    if [ "$LLM_PROVIDER" == "llamacpp_api" ]; then
+        if [ ! -f "$LLM_MODEL_PATH" ]; then
+            log_warning "LLM model not found at: $LLM_MODEL_PATH"
+            if [ "$FORCE_MODE" = true ] && command_exists curl; then
+                log_info "Attempting to download model..."
+                MODEL_DIR=$(dirname "$LLM_MODEL_PATH")
+                mkdir -p "$MODEL_DIR"
+                curl -L "https://huggingface.co/TheBloke/Mixtral-8x7B-Instruct-v0.1-GGUF/resolve/main/mixtral-8x7b-instruct-v0.1.Q4_K_M.gguf" -o "$LLM_MODEL_PATH" || log_warning "Failed to download model. Please download manually."
+                if [ -f "$LLM_MODEL_PATH" ]; then
+                    log_info "Successfully downloaded model to: $LLM_MODEL_PATH"
+                fi
+            else
+                log_warning "Model download skipped (--force not enabled or curl not available)."
+            fi
+        else
+            log_info "LLM model found at: $LLM_MODEL_PATH"
+        fi
+    fi
+}
+
+# --- Main Setup Script ---
+START_DIR=$(pwd)
+log_info "Starting Enhanced Kaleidoscope AI Setup..."
+
+if [ ! -d "$PROJECT_DIR_NAME" ]; then
+    error_exit "Project directory '$PROJECT_DIR_NAME' not found in $(pwd). Run from the directory containing '$PROJECT_DIR_NAME'."
+fi
+
+cd "$PROJECT_DIR_NAME" || error_exit "Failed to enter project directory '$PROJECT_DIR_NAME'."
+PROJECT_FULL_PATH=$(pwd)
+CONFIG_FILE="$PROJECT_FULL_PATH/$CONFIG_FILE_NAME"
+
+# Initialize log file
+echo "Kaleidoscope AI Setup Log - $SETUP_ID" > "$LOG_FILE"
+log_info "Setup started in $PROJECT_FULL_PATH"
+
+# 1. Check prerequisites
+check_python_version
+check_system_dependencies
+check_python_packages
+auto_detect_tools
+check_llm_model
+
+# 2. Setup virtual environment
+log_info "Setting up Python virtual environment..."
+if [ ! -d "$VENV_DIR" ] || [ "$FORCE_MODE" = true ]; then
+    $PYTHON_CMD -m venv "$VENV_DIR" || error_exit "Failed to create virtual environment." "venv"
+    log_info "Created virtual environment in '$VENV_DIR'"
+else
+    log_info "Virtual environment '$VENV_DIR' already exists."
+fi
+
+source "$VENV_DIR/bin/activate" || error_exit "Failed to activate virtual environment." "venv"
+log_info "Virtual environment activated."
+
+# 3. Install dependencies
+log_info "Installing Python dependencies from $REQUIREMENTS_FILE..."
+if [ ! -f "$REQUIREMENTS_FILE" ]; then
+    error_exit "'$REQUIREMENTS_FILE' not found."
+fi
+pip install --upgrade pip setuptools wheel || log_warning "Failed to upgrade pip tools."
+pip install -r "$REQUIREMENTS_FILE" || error_exit "Failed to install dependencies from $REQUIREMENTS_FILE." "dependencies"
+log_info "Python dependencies installed."
+
+# 4. Generate config.json
+log_info "Generating $CONFIG_FILE_NAME..."
+cat > "$CONFIG_FILE" << EOF
+{
+  "system": {
+    "dimension": 128,
+    "auto_discovery": true,
+    "max_active_nodes": 1000,
+    "mutation_interval": 10.0
+  },
+  "paths": {
+    "data_dir": "./data",
+    "log_dir": "./data/logs",
+    "persistence_dir": "./data",
+    "model_cache": "$HOME/.cache/unravel-ai/models",
+    "reconstruction_dir": "./reconstructed",
+    "applications_dir": "./applications"
+  },
+  "server": {
+    "host": "0.0.0.0",
+    "port": $API_PORT
+  },
+  "visualizer": {
+    "port": $VIS_PORT
+  },
+  "llm": {
+    "provider": "$LLM_PROVIDER",
+    "model_id": "TheBloke/Mistral-7B-Instruct-v0.2-GGUF",
+    "model_file": "mistral-7b-instruct-v0.2.Q4_K_M.gguf",
+    "model_path": "$LLM_MODEL_PATH",
+    "api_base": "$LLM_API_BASE",
+    "n_ctx": 2048,
+    "default_model": "$OLLAMA_DEFAULT_MODEL",
+    "available_models": ["codellama", "llama2", "mistral", "phi"],
+    "temperature": 0.2,
+    "max_tokens": 4096,
+    "context_window": 8192,
+    "gpu_enabled": $GPU_SUPPORT
+  },
+  "quantum_sync": {
+    "enable": true,
+    "server_url": "$QUANTUM_SYNC_URL"
+  },
+  "sandbox": {
+    "enable": true
+  },
+  "tools": {
+    "radare2_path": "$RADARE2_CMD",
+    "ghidra_path": "$GHIDRA_PATH",
+    "retdec_path": "$RETDEC_CMD",
+    "js_beautify_path": "$JSBEAUTIFY_CMD"
+  },
+  "max_workers": 4,
+  "logging": {
+    "level": "INFO",
+    "file": "kaleidoscope.log",
+    "console": true
+  },
+  "processing": {
+    "chunk_size": 4096,
+    "max_file_size": 100000000
+  },
+  "web_interface": {
+    "host": "127.0.0.1",
+    "port": $WEB_PORT,
+    "enable_upload": true,
+    "max_upload_size": 50000000
+  }
+}
+EOF
+log_info "Generated initial $CONFIG_FILE_NAME."
+
+# 5. Resolve port conflicts
+log_info "Checking and resolving port conflicts..."
+LLM_PORT=$(echo "$LLM_API_BASE" | grep -o '[0-9]\+$')
+QUANTUM_PORT=$(echo "$QUANTUM_SYNC_URL" | grep -o '[0-9]\+$')
+
+WEB_PORT=$(find_free_port "$WEB_PORT" "Web Interface")
+API_PORT=$(find_free_port "$API_PORT" "Backend API Server")
+VIS_PORT=$(find_free_port "$VIS_PORT" "Visualizer")
+if [ "$LLM_PROVIDER" == "llamacpp_api" ]; then
+    LLM_PORT=$(find_free_port "$LLM_PORT" "Llama.cpp API")
+    NEW_LLM_API_BASE="http://localhost:$LLM_PORT"
+    update_config_port "$CONFIG_FILE" "llm" "api_base" "\"$NEW_LLM_API_BASE\""
+    LLM_API_BASE="$NEW_LLM_API_BASE"
+fi
+QUANTUM_PORT=$(find_free_port "$QUANTUM_PORT" "Quantum Sync Server")
+NEW_QUANTUM_SYNC_URL="ws://localhost:$QUANTUM_PORT"
+update_config_port "$CONFIG_FILE" "quantum_sync" "server_url" "\"$NEW_QUANTUM_SYNC_URL\""
+QUANTUM_SYNC_URL="$NEW_QUANTUM_SYNC_URL"
+update_config_port "$CONFIG_FILE" "web_interface" "port" "$WEB_PORT"
+update_config_port "$CONFIG_FILE" "server" "port" "$API_PORT"
+update_config_port "$CONFIG_FILE" "visualizer" "port" "$VIS_PORT"
+log_info "Port conflicts resolved and $CONFIG_FILE_NAME updated."
+
+# 6. Install project
+log_info "Installing project in editable mode..."
+pip install -e . || error_exit "Failed to install project in editable mode."
+log_info "Project installed."
+
+# 7. Syntax check
+log_info "Performing basic syntax check on key Python files..."
+SYNTAX_CHECK_FILES=(
+    "main.py"
+    "core/kaleidoscope_core.py"
+    "web/kaleidoscope_web.py"
+    "quantum/quantum_server.py"
+)
+SYNTAX_OK=1
+for py_file in "${SYNTAX_CHECK_FILES[@]}"; do
+    if [ -f "$py_file" ]; then
+        log_info "Checking $py_file..."
+        if ! $PYTHON_CMD -m py_compile "$py_file"; then
+            log_error "Syntax error in '$py_file'. Please fix manually."
+            SYNTAX_OK=0
+        fi
+    else
+        log_warning "Syntax check skipped: '$py_file' not found."
+    fi
+done
+if [ $SYNTAX_OK -eq 0 ]; then
+    error_exit "Syntax errors detected."
+else
+    log_info "Basic syntax checks passed."
+fi
+
+# 8. Finalize
+cd "$START_DIR"
+success_exit
